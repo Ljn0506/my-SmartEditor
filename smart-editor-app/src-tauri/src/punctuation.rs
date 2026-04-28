@@ -1,4 +1,12 @@
+use once_cell::sync::Lazy;
 use regex::Regex;
+
+static RE_CONSECUTIVE_CN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"([，。！？；：、]{2,})").unwrap());
+static RE_CN_ELLIPSIS: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"([\u{4e00}-\u{9fff}])\.{3,}([\u{4e00}-\u{9fff}])").unwrap());
+static RE_FW_LETTER: Lazy<Regex> = Lazy::new(|| Regex::new(r"[Ａ-Ｚａ-ｚ]+").unwrap());
+static RE_FW_NUMBER: Lazy<Regex> = Lazy::new(|| Regex::new(r"[０-９]+").unwrap());
 
 /// 标点符号问题项
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -91,8 +99,7 @@ fn check_consecutive_punctuation(
     mut id: i64,
 ) -> i64 {
     // 连续 2 个及以上相同中文标点（排除合法省略号 ……）
-    let re_chinese = Regex::new(r"([，。！？；：、]{2,})").unwrap();
-    for cap in re_chinese.captures_iter(text) {
+    for cap in RE_CONSECUTIVE_CN.captures_iter(text) {
         let m = cap.get(0).unwrap();
         let start = text[..m.start()].chars().count();
         let orig = m.as_str();
@@ -116,8 +123,7 @@ fn check_consecutive_punctuation(
     }
 
     // 英文连续句号 "..."（3个及以上）在中文语境中
-    let re_dots = Regex::new(r"([\u{4e00}-\u{9fff}])\.{3,}([\u{4e00}-\u{9fff}])").unwrap();
-    for cap in re_dots.captures_iter(text) {
+    for cap in RE_CN_ELLIPSIS.captures_iter(text) {
         let m = cap.get(0).unwrap();
         let start = text[..m.start()].chars().count();
         let orig = m.as_str().to_string();
@@ -139,9 +145,11 @@ fn check_consecutive_punctuation(
 // --- 规则 3：引号配对 ---
 
 fn check_quote_pairs(text: &str, issues: &mut Vec<PunctuationIssue>, mut id: i64) -> i64 {
+    // ASCII 直引号 " 和 ' 的开闭字符相同，无法在不解析语义的情况下判定配对，
+    // 这里只检查可区分开闭的中文/角标引号。
     let pairs: &[(char, char, &str)] = &[
-        ('"', '"', "双引号"),
-        ('\'', '\'', "单引号"),
+        ('\u{201C}', '\u{201D}', "双引号"),
+        ('\u{2018}', '\u{2019}', "单引号"),
         ('「', '」', "直角引号"),
         ('【', '】', "方头括号"),
         ('『', '』', "双直角引号"),
@@ -177,8 +185,7 @@ fn check_fullwidth_letters_numbers(
     mut id: i64,
 ) -> i64 {
     // 全角字母 Ａ-Ｚａ-ｚ
-    let re_fw_letter = Regex::new(r"[Ａ-Ｚａ-ｚ]+").unwrap();
-    for m in re_fw_letter.find_iter(text) {
+    for m in RE_FW_LETTER.find_iter(text) {
         let start = text[..m.start()].chars().count();
         let orig = m.as_str();
         let sugg: String = orig
@@ -205,8 +212,7 @@ fn check_fullwidth_letters_numbers(
     }
 
     // 全角数字 ０-９
-    let re_fw_num = Regex::new(r"[０-９]+").unwrap();
-    for m in re_fw_num.find_iter(text) {
+    for m in RE_FW_NUMBER.find_iter(text) {
         let start = text[..m.start()].chars().count();
         let orig = m.as_str();
         let sugg: String = orig

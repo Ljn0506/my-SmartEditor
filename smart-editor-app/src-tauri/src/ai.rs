@@ -11,10 +11,11 @@ pub struct AiClient {
 
 impl AiClient {
     pub fn new(config: AiConfig) -> Self {
-        Self {
-            config,
-            http: reqwest::Client::new(),
-        }
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .unwrap_or_default();
+        Self { config, http }
     }
 
     /// 根据文档内容提取需求要点

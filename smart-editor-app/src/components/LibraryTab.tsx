@@ -111,7 +111,8 @@ export default function LibraryTab({ editor }: { editor: Editor | null }) {
               use_count: 0,
               rating: 0,
             }));
-          } catch {
+          } catch (err) {
+            console.warn("Meilisearch failed, falling back to SQLite:", err);
             result = await invoke("search_templates_db", {
               ...dbFilters,
               keyword: searchKeyword.trim() || null,

@@ -1,3 +1,4 @@
+use once_cell::sync::Lazy;
 use regex::Regex;
 
 use crate::models::{
@@ -13,10 +14,17 @@ const STOP_WORDS: &[&str] = &[
     "此", "上述", "以下", "以上",
 ];
 
+static RE_SECTION_NUM: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^\s*(\d+(?:\.\d+)*)\s*[、.．]?\s*").unwrap());
+static RE_NON_KEYWORD: Lazy<Regex> = Lazy::new(|| Regex::new(r"[^一-龥a-zA-Z0-9]+").unwrap());
+static RE_VALIDITY: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"有效期\s*(?:不少于?|至少)?\s*(\d+)\s*天").unwrap());
+static RE_NUMERIC_VALUE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(\d+(?:\.\d+)?)\s*([a-zA-Z一-龥]+)").unwrap());
+
 /// 从招标文件文本提取强制要求项
 pub fn extract_requirements(req_text: &str) -> Vec<RequirementItem> {
     let mut items = Vec::new();
-    let section_re = Regex::new(r"^\s*(\d+(?:\.\d+)*)\s*[、.．]?\s*").unwrap();
     let mut current_section = String::new();
     let mut id = 1i64;
 
@@ -27,7 +35,7 @@ pub fn extract_requirements(req_text: &str) -> Vec<RequirementItem> {
         }
 
         // 提取章节编号
-        if let Some(cap) = section_re.captures(trimmed) {
+        if let Some(cap) = RE_SECTION_NUM.captures(trimmed) {
             current_section = cap.get(1).map_or("", |m| m.as_str()).to_string();
             continue;
         }
@@ -325,10 +333,9 @@ fn html_escape(text: &str) -> String {
 // --- 内部工具函数 ---
 
 fn extract_keywords(text: &str) -> Vec<String> {
-    let re = Regex::new(r"[^一-龥a-zA-Z0-9]+").unwrap();
     let mut result = Vec::new();
 
-    for word in re.split(text) {
+    for word in RE_NON_KEYWORD.split(text) {
         let word = word.trim().to_lowercase();
         if word.is_empty() || word.len() < 2 || STOP_WORDS.contains(&word.as_str()) {
             continue;
@@ -434,8 +441,7 @@ pub fn check_fatal_risks(bid_text: &str) -> Vec<crate::models::FatalRisk> {
     }
 
     // 4. 有效期检查
-    let validity_re = Regex::new(r"有效期\s*(?:不少于?|至少)?\s*(\d+)\s*天").unwrap();
-    if let Some(cap) = validity_re.captures(&lower) {
+    if let Some(cap) = RE_VALIDITY.captures(&lower) {
         if let Some(days_match) = cap.get(1) {
             if let Ok(days) = days_match.as_str().parse::<i64>() {
                 if days < 90 {
@@ -468,8 +474,8 @@ pub fn check_fatal_risks(bid_text: &str) -> Vec<crate::models::FatalRisk> {
 // --- 数值比较工具 ---
 
 fn extract_numeric_values(text: &str) -> Vec<NumericValue> {
-    let re = Regex::new(r"(\d+(?:\.\d+)?)\s*([a-zA-Z一-龥]+)").unwrap();
-    re.captures_iter(text)
+    RE_NUMERIC_VALUE
+        .captures_iter(text)
         .filter_map(|cap| {
             let val: f64 = cap.get(1)?.as_str().parse().ok()?;
             let unit = cap.get(2)?.as_str().trim().to_lowercase();

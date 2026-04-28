@@ -7,13 +7,6 @@ pub struct Database {
     conn: Connection,
 }
 
-// rusqlite 的 bundled feature 默认编译 SQLite 为 Serialized 模式
-// (SQLITE_THREADSAFE=1)，允许多线程安全使用同一连接。
-// 此 unsafe impl 将线程安全标记集中到 Database 层，避免在 AppState
-// 上做更大范围的 unsafe 断言。
-unsafe impl Send for Database {}
-unsafe impl Sync for Database {}
-
 impl Database {
     pub fn new(db_path: &str) -> Result<Self> {
         let conn = Connection::open(db_path)?;
@@ -44,6 +37,15 @@ impl Database {
             )",
             [],
         )?;
+        for stmt in [
+            "CREATE INDEX IF NOT EXISTS idx_templates_doc_attr ON templates(doc_attr)",
+            "CREATE INDEX IF NOT EXISTS idx_templates_business_domain ON templates(business_domain)",
+            "CREATE INDEX IF NOT EXISTS idx_templates_content_module ON templates(content_module)",
+            "CREATE INDEX IF NOT EXISTS idx_templates_project_phase ON templates(project_phase)",
+            "CREATE INDEX IF NOT EXISTS idx_templates_use_count ON templates(use_count DESC, rating DESC)",
+        ] {
+            self.conn.execute(stmt, [])?;
+        }
         Ok(())
     }
 
