@@ -121,3 +121,8 @@ smart-editor-app/
    - coder 完成 → 发送给 reviewer `[TASK] 请审查代码`
    - reviewer 通过后 → 发送给 planner `[DONE] 审查通过，可合并`
 5. **工作目录一致**: 所有 Agent 的 `workdir` 都应为 `~/smart-editor`
+6. **提交权限受控**: coder/backend/tester 等执行角色**禁止自行 `git commit` / `git push` / `git rebase` / `git reset --hard` / squash 等改动 git 历史的操作**。
+   - 完成开发或测试后，仅允许通过 `[REPLY]` 汇报结果（含变更范围、门禁结论），等待研发经理（manager 角色）拍板下一步
+   - 即使全量门禁绿、即使没 push，本地历史的 squash/reset 也属越权
+   - 例外：`git status` / `git diff` / `git log` 等只读查询无需审批
+   - 违反此规则时，manager 有权要求回滚并通报；屡犯将影响后续派单
