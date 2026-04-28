@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   Upload,
   Library,
@@ -7,8 +9,13 @@ import {
   Settings,
   FileText,
   ClipboardCopy,
+  AlertTriangle,
+  Download,
+  Trash2,
+  Play,
 } from "lucide-react";
 import TiptapEditor from "./components/TiptapEditor";
+import LibraryTab from "./components/LibraryTab";
 
 // 标签页类型
 type TabKey = "upload" | "library" | "push" | "check" | "settings";
@@ -24,12 +31,19 @@ const tabs: { key: TabKey; label: string; icon: React.ReactNode }[] = [
 function App() {
   const [activeTab, setActiveTab] = useState<TabKey>("upload");
   const [editor, setEditor] = useState<any>(null);
+  const [copyToast, setCopyToast] = useState<string | null>(null);
 
   const handleCopy = async () => {
     if (!editor) return;
     const html = editor.getHTML();
-    // TODO: 通过 Tauri 剪贴板 API 写入系统剪贴板
-    console.log("Copy HTML:", html.substring(0, 200) + "...");
+    try {
+      await invoke("write_clipboard_html", { html });
+      setCopyToast("已复制到剪贴板");
+      setTimeout(() => setCopyToast(null), 2000);
+    } catch (e: any) {
+      setCopyToast(`复制失败: ${String(e)}`);
+      setTimeout(() => setCopyToast(null), 3000);
+    }
   };
 
   return (
@@ -59,9 +73,9 @@ function App() {
         <div className="w-[45%] min-w-[360px] max-w-[560px] flex flex-col border-r border-gray-200 bg-white">
           <div className="flex-1 overflow-auto">
             {activeTab === "upload" && <UploadTab />}
-            {activeTab === "library" && <LibraryTab />}
+            {activeTab === "library" && <LibraryTab editor={editor} />}
             {activeTab === "push" && <PushTab />}
-            {activeTab === "check" && <CheckTab />}
+            {activeTab === "check" && <CheckTab editor={editor} />}
             {activeTab === "settings" && <SettingsTab />}
           </div>
         </div>
@@ -84,6 +98,13 @@ function App() {
           </div>
         </div>
       </main>
+
+      {/* 复制提示 Toast */}
+      {copyToast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg bg-gray-800 text-white text-sm shadow-lg z-50">
+          {copyToast}
+        </div>
+      )}
     </div>
   );
 }
@@ -211,122 +232,6 @@ function UploadTab() {
   );
 }
 
-// ========== 模板库标签页 ==========
-function LibraryTab() {
-  const [activeFilter, setActiveFilter] = useState("全部");
-  const filters = ["全部", "投标应答", "技术方案", "实施方案", "合同协议"];
-
-  const templates = [
-    {
-      title: "等保 2.0 三级通用技术方案",
-      domain: "网络安全",
-      module: "技术方案",
-      phase: "投标",
-      tags: ["#等保2.0", "#三级", "#通用要求"],
-    },
-    {
-      title: "RBAC 权限管理设计方案",
-      domain: "应用安全",
-      module: "技术方案",
-      phase: "方案",
-      tags: [],
-    },
-    {
-      title: "渗透测试服务投标文件",
-      domain: "网络安全",
-      module: "偏离说明",
-      phase: "投标",
-      tags: [],
-    },
-  ];
-
-  return (
-    <div className="h-full flex">
-      {/* 左侧筛选 */}
-      <aside className="w-56 bg-white border-r border-gray-200 p-4 overflow-auto">
-        <h3 className="font-semibold text-sm mb-3">文档属性</h3>
-        <div className="space-y-1 mb-6">
-          {filters.map((f) => (
-            <button
-              key={f}
-              onClick={() => setActiveFilter(f)}
-              className={`w-full text-left px-3 py-1.5 rounded text-sm ${
-                activeFilter === f
-                  ? "bg-blue-50 text-blue-600 font-medium"
-                  : "text-gray-600 hover:bg-gray-50"
-              }`}
-            >
-              {activeFilter === f ? "●" : "○"} {f}
-            </button>
-          ))}
-        </div>
-        <h3 className="font-semibold text-sm mb-3">业务领域</h3>
-        <div className="space-y-1 mb-6 text-sm text-gray-600">
-          <div className="px-3 py-1">● 全部</div>
-          <div className="px-3 py-1">○ 网络安全</div>
-          <div className="px-3 py-1">○ 应用安全</div>
-          <div className="px-3 py-1">○ 数据安全</div>
-        </div>
-        <h3 className="font-semibold text-sm mb-3">内容模块</h3>
-        <div className="space-y-1 text-sm text-gray-600">
-          <div className="px-3 py-1">● 全部</div>
-          <div className="px-3 py-1">○ 技术方案</div>
-          <div className="px-3 py-1">○ 商务条款</div>
-          <div className="px-3 py-1">○ 偏离说明</div>
-        </div>
-      </aside>
-
-      {/* 右侧模板列表 */}
-      <div className="flex-1 p-6 overflow-auto">
-        <div className="flex gap-2 mb-4">
-          <input
-            type="text"
-            placeholder="搜索模板..."
-            className="flex-1 px-4 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <button className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
-            搜索
-          </button>
-        </div>
-        <div className="space-y-3">
-          {templates.map((t, i) => (
-            <div
-              key={i}
-              className="bg-white rounded-lg border border-gray-200 p-4 hover:shadow-md transition-shadow"
-            >
-              <div className="font-medium mb-1">{t.title}</div>
-              <div className="text-sm text-gray-500 mb-2">
-                领域: {t.domain} · 模块: {t.module} · 阶段: {t.phase}
-              </div>
-              <div className="flex items-center gap-2">
-                {t.tags.map((tag) => (
-                  <span
-                    key={tag}
-                    className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600"
-                  >
-                    {tag}
-                  </span>
-                ))}
-              </div>
-              <div className="mt-3 flex gap-2">
-                <button className="text-xs px-3 py-1 rounded border border-gray-200 hover:bg-gray-50">
-                  预览
-                </button>
-                <button className="text-xs px-3 py-1 rounded border border-gray-200 hover:bg-gray-50">
-                  插入
-                </button>
-                <button className="text-xs px-3 py-1 rounded border border-gray-200 hover:bg-gray-50">
-                  收藏
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ========== 智能推送标签页 ==========
 function PushTab() {
   return (
@@ -344,67 +249,433 @@ function PushTab() {
   );
 }
 
-// ========== 校对面板标签页 ==========
-function CheckTab() {
+// ========== 偏离检查面板 ==========
+
+type DeviationStatus = "None" | "Positive" | "Minor" | "Major";
+
+interface DeviationCheckResult {
+  id: number;
+  section: string;
+  requirement_text: string;
+  response_text: string | null;
+  status: DeviationStatus;
+  risk_level: string;
+  explanation: string;
+  suggestion: string;
+}
+
+interface DeviationReport {
+  total: number;
+  none_count: number;
+  positive_count: number;
+  minor_count: number;
+  major_count: number;
+  fatal_risk_count: number;
+  items: DeviationCheckResult[];
+}
+
+interface FatalRisk {
+  category: string;
+  description: string;
+  risk_level: string;
+  suggestion: string;
+}
+
+interface PunctuationIssue {
+  id: number;
+  message: string;
+  severity: string;
+  original: string;
+  suggestion: string;
+  position: number;
+}
+
+function statusLabel(s: DeviationStatus): string {
+  const map: Record<DeviationStatus, string> = {
+    None: "完全响应",
+    Positive: "正偏离",
+    Minor: "轻微偏离",
+    Major: "重大偏离",
+  };
+  return map[s];
+}
+
+function statusColor(s: DeviationStatus): string {
+  const map: Record<DeviationStatus, string> = {
+    None: "bg-green-50 text-green-700 border-green-200",
+    Positive: "bg-blue-50 text-blue-700 border-blue-200",
+    Minor: "bg-amber-50 text-amber-700 border-amber-200",
+    Major: "bg-red-50 text-red-700 border-red-200",
+  };
+  return map[s];
+}
+
+function CheckTab({ editor }: { editor: any }) {
+  const [reqFile, setReqFile] = useState<string | null>(null);
+  const [bidFile, setBidFile] = useState<string | null>(null);
+  const [report, setReport] = useState<DeviationReport | null>(null);
+  const [fatalRisks, setFatalRisks] = useState<FatalRisk[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [punctIssues, setPunctIssues] = useState<PunctuationIssue[]>([]);
+  const [punctLoading, setPunctLoading] = useState(false);
+
+  const pickFile = async (type: "req" | "bid") => {
+    const selected = await open({
+      multiple: false,
+      filters: [
+        { name: "文档", extensions: ["docx", "doc", "pdf", "xlsx", "txt"] },
+      ],
+    });
+    if (selected && typeof selected === "string") {
+      if (type === "req") setReqFile(selected);
+      else setBidFile(selected);
+      setError(null);
+    }
+  };
+
+  const runCheck = async () => {
+    if (!reqFile || !bidFile) {
+      setError("请同时上传招标文件和投标文档");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setReport(null);
+    setFatalRisks([]);
+    try {
+      const result: DeviationReport = await invoke("check_deviation_files", {
+        bidPath: bidFile,
+        reqPath: reqFile,
+      });
+      setReport(result);
+
+      const bidText: string = await invoke("parse_document", {
+        filePath: bidFile,
+      });
+      const risks: FatalRisk[] = await invoke("check_fatal_risks_text", {
+        text: bidText,
+      });
+      setFatalRisks(risks);
+    } catch (e: any) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const exportMd = () => {
+    if (!report) return;
+    let md = "# 偏离检查报告\n\n";
+    md += `| 总项 | 完全响应 | 正偏离 | 轻微偏离 | 重大偏离 |\n`;
+    md += `|------|----------|--------|----------|----------|\n`;
+    md += `| ${report.total} | ${report.none_count} | ${report.positive_count} | ${report.minor_count} | ${report.major_count} |\n\n`;
+    md += "| 序号 | 章节 | 要求 | 状态 | 风险 | 说明 | 建议 |\n";
+    md += "|------|------|------|------|------|------|------|\n";
+    report.items.forEach((it) => {
+      md += `| ${it.id} | ${it.section} | ${it.requirement_text} | ${statusLabel(it.status)} | ${it.risk_level} | ${it.explanation} | ${it.suggestion} |\n`;
+    });
+    if (fatalRisks.length > 0) {
+      md += "\n## 废标风险项\n\n";
+      fatalRisks.forEach((r) => {
+        md += `- **${r.category}**：${r.description}（${r.risk_level}）→ ${r.suggestion}\n`;
+      });
+    }
+    const blob = new Blob([md], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "偏离检查报告.md";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const clear = () => {
+    setReqFile(null);
+    setBidFile(null);
+    setReport(null);
+    setFatalRisks([]);
+    setError(null);
+    setPunctIssues([]);
+  };
+
+  const runPunctuationCheck = async () => {
+    if (!editor) {
+      setError("编辑器未就绪");
+      return;
+    }
+    const text = editor.getText();
+    setPunctLoading(true);
+    setError(null);
+    try {
+      const issues: PunctuationIssue[] = await invoke("check_punctuation", { text });
+      setPunctIssues(issues);
+    } catch (e: any) {
+      setError(String(e));
+    } finally {
+      setPunctLoading(false);
+    }
+  };
+
+  const applyPunctuationFixes = () => {
+    if (!editor || punctIssues.length === 0) return;
+    // 从后往前替换，避免位置偏移
+    const sorted = [...punctIssues].sort((a, b) => b.position - a.position);
+    let text = editor.getText();
+    for (const issue of sorted) {
+      const before = text.slice(0, issue.position);
+      const after = text.slice(issue.position + issue.original.length);
+      text = before + issue.suggestion + after;
+    }
+    editor.chain().focus().setContent(`<p>${text.replace(/\n/g, "</p><p>")}</p>`).run();
+    setPunctIssues([]);
+  };
+
   return (
-    <div className="h-full p-6 overflow-auto">
-      <h2 className="text-base font-semibold mb-4 flex items-center gap-2">
-        <SearchCheck size={18} />
-        文档校对
-      </h2>
-      <div className="flex gap-2 mb-4">
-        {["全部", "偏离项", "废标风险", "格式", "术语", "数据一致性"].map(
-          (f, i) => (
+    <div className="h-full flex flex-col overflow-hidden">
+      {/* 头部上传区 */}
+      <div className="shrink-0 p-4 border-b border-gray-200 bg-white space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold flex items-center gap-2">
+            <SearchCheck size={18} />
+            偏离检查
+          </h2>
+          {(reqFile || bidFile || report) && (
             <button
-              key={f}
-              className={`px-3 py-1.5 rounded-md text-sm ${
-                i === 0
-                  ? "bg-blue-50 text-blue-600 font-medium"
-                  : "text-gray-600 hover:bg-gray-100"
-              }`}
+              onClick={clear}
+              className="text-xs flex items-center gap-1 text-gray-500 hover:text-red-600"
             >
-              {f}
+              <Trash2 size={14} />
+              重置
             </button>
-          )
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          {/* 招标文件 */}
+          <div
+            onClick={() => pickFile("req")}
+            className={`border-2 border-dashed rounded-lg p-3 text-center cursor-pointer transition-colors ${
+              reqFile
+                ? "border-green-400 bg-green-50"
+                : "border-gray-300 hover:border-blue-400"
+            }`}
+          >
+            <Upload size={20} className={`mx-auto mb-1 ${reqFile ? "text-green-600" : "text-gray-400"}`} />
+            <p className="text-xs font-medium text-gray-700">
+              {reqFile ? reqFile.split(/[/\\]/).pop() : "点击选择招标文件"}
+            </p>
+          </div>
+          {/* 投标文档 */}
+          <div
+            onClick={() => pickFile("bid")}
+            className={`border-2 border-dashed rounded-lg p-3 text-center cursor-pointer transition-colors ${
+              bidFile
+                ? "border-green-400 bg-green-50"
+                : "border-gray-300 hover:border-blue-400"
+            }`}
+          >
+            <Upload size={20} className={`mx-auto mb-1 ${bidFile ? "text-green-600" : "text-gray-400"}`} />
+            <p className="text-xs font-medium text-gray-700">
+              {bidFile ? bidFile.split(/[/\\]/).pop() : "点击选择投标文档"}
+            </p>
+          </div>
+        </div>
+
+        {error && (
+          <div className="text-xs text-red-600 bg-red-50 rounded px-3 py-2">
+            {error}
+          </div>
         )}
+
+        <button
+          onClick={runCheck}
+          disabled={loading || !reqFile || !bidFile}
+          className="w-full flex items-center justify-center gap-2 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+        >
+          <Play size={16} />
+          {loading ? "检查中..." : "开始检查"}
+        </button>
       </div>
-      <div className="space-y-4">
-        <div className="bg-white rounded-lg border border-gray-200 p-4">
-          <h3 className="text-sm font-medium text-amber-600 mb-2">⚠️ 偏离项 (2)</h3>
-          <div className="space-y-2 text-sm">
-            <div className="flex items-start gap-2 p-2 bg-amber-50 rounded">
-              <input type="checkbox" className="mt-0.5" />
-              <div>
-                <div>3.2 节：缺少等保三级要求说明（招标文件 2.3 节强制要求）</div>
-                <div className="text-xs text-gray-500 mt-1">
-                  风险等级：高 [定位] [建议修复]
+
+      {/* 结果展示区 */}
+      <div className="flex-1 overflow-auto p-4 space-y-4">
+        {!report && !loading && (
+          <div className="text-center text-gray-400 py-12 text-sm">
+            上传招标文件和投标文档后，点击"开始检查"查看偏离分析结果
+          </div>
+        )}
+
+        {report && (
+          <>
+            {/* 统计卡片 */}
+            <div className="grid grid-cols-5 gap-2">
+              {[
+                { label: "完全响应", count: report.none_count, color: "bg-green-100 text-green-700" },
+                { label: "正偏离", count: report.positive_count, color: "bg-blue-100 text-blue-700" },
+                { label: "轻微偏离", count: report.minor_count, color: "bg-amber-100 text-amber-700" },
+                { label: "重大偏离", count: report.major_count, color: "bg-red-100 text-red-700" },
+                { label: "致命风险", count: fatalRisks.length, color: "bg-gray-100 text-gray-700" },
+              ].map((c) => (
+                <div key={c.label} className={`rounded-lg p-2 text-center ${c.color}`}>
+                  <div className="text-lg font-bold">{c.count}</div>
+                  <div className="text-xs">{c.label}</div>
                 </div>
+              ))}
+            </div>
+
+            {/* 偏离项列表 */}
+            <div className="bg-white rounded-lg border border-gray-200">
+              <div className="px-4 py-3 border-b border-gray-100 font-medium text-sm flex items-center justify-between">
+                <span>偏离项详情 ({report.items.length})</span>
+                <button
+                  onClick={exportMd}
+                  className="text-xs flex items-center gap-1 text-blue-600 hover:text-blue-700"
+                >
+                  <Download size={14} />
+                  导出报告
+                </button>
+              </div>
+              <div className="divide-y divide-gray-100">
+                {report.items.map((it) => (
+                  <div
+                    key={it.id}
+                    className={`px-4 py-3 text-sm border-l-4 ${statusColor(it.status).replace(/bg-[^ ]+/, "")}`}
+                    style={{
+                      borderLeftColor:
+                        it.status === "None"
+                          ? "#22c55e"
+                          : it.status === "Positive"
+                          ? "#3b82f6"
+                          : it.status === "Minor"
+                          ? "#f59e0b"
+                          : "#ef4444",
+                    }}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1">
+                        <div className="font-medium text-gray-800">
+                          #{it.id} {it.requirement_text}
+                        </div>
+                        {it.response_text && (
+                          <div className="text-xs text-gray-500 mt-1">
+                            应答：{it.response_text}
+                          </div>
+                        )}
+                        <div className="text-xs text-gray-500 mt-1">
+                          {it.explanation}
+                        </div>
+                        <div className="text-xs text-blue-600 mt-1">
+                          建议：{it.suggestion}
+                        </div>
+                      </div>
+                      <span
+                        className={`shrink-0 px-2 py-0.5 rounded text-xs font-medium border ${statusColor(it.status)}`}
+                      >
+                        {statusLabel(it.status)}
+                      </span>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
-          </div>
-        </div>
-        <div className="bg-white rounded-lg border border-gray-200 p-4">
-          <h3 className="text-sm font-medium text-red-600 mb-2">❌ 废标风险项 (1)</h3>
-          <div className="space-y-2 text-sm">
-            <div className="flex items-start gap-2 p-2 bg-red-50 rounded">
-              <input type="checkbox" className="mt-0.5" />
-              <div>
-                <div>缺少法人代表签字页（招标文件 P15 明确要求）</div>
-                <div className="text-xs text-gray-500 mt-1">
-                  风险等级：致命 [定位]
+
+            {/* 废标风险 */}
+            {fatalRisks.length > 0 && (
+              <div className="bg-white rounded-lg border border-red-200">
+                <div className="px-4 py-3 border-b border-red-100 font-medium text-sm text-red-700 flex items-center gap-2">
+                  <AlertTriangle size={16} />
+                  废标风险项 ({fatalRisks.length})
+                </div>
+                <div className="divide-y divide-red-50">
+                  {fatalRisks.map((r, i) => (
+                    <div key={i} className="px-4 py-3 text-sm">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1">
+                          <div className="font-medium text-red-700">
+                            {r.category}
+                          </div>
+                          <div className="text-gray-600 mt-0.5">
+                            {r.description}
+                          </div>
+                          <div className="text-xs text-blue-600 mt-1">
+                            建议：{r.suggestion}
+                          </div>
+                        </div>
+                        <span className="shrink-0 px-2 py-0.5 rounded text-xs font-medium bg-red-50 text-red-700 border border-red-200">
+                          {r.risk_level}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
+            )}
+          </>
+        )}
+
+        {/* 格式检查 */}
+        <div className="bg-white rounded-lg border border-gray-200">
+          <div className="px-4 py-3 border-b border-gray-100 font-medium text-sm flex items-center justify-between">
+            <span className="flex items-center gap-2">
+              <SearchCheck size={16} className="text-gray-500" />
+              格式检查（标点符号）
+            </span>
+            <div className="flex gap-2">
+              {punctIssues.length > 0 && (
+                <button
+                  onClick={applyPunctuationFixes}
+                  className="text-xs px-3 py-1.5 rounded bg-emerald-50 text-emerald-600 hover:bg-emerald-100 flex items-center gap-1"
+                >
+                  一键修复 ({punctIssues.length})
+                </button>
+              )}
+              <button
+                onClick={runPunctuationCheck}
+                disabled={punctLoading || !editor}
+                className="text-xs px-3 py-1.5 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 flex items-center gap-1 disabled:opacity-50"
+              >
+                <SearchCheck size={14} />
+                {punctLoading ? "检查中..." : "检查标点符号"}
+              </button>
             </div>
           </div>
+          {punctIssues.length === 0 && !punctLoading && (
+            <div className="px-4 py-6 text-center text-gray-400 text-xs">
+              点击"检查标点符号"扫描编辑器内容
+            </div>
+          )}
+          {punctLoading && (
+            <div className="px-4 py-6 text-center text-gray-400 text-xs">
+              检查中...
+            </div>
+          )}
+          {punctIssues.length > 0 && (
+            <div className="divide-y divide-gray-100 max-h-48 overflow-auto">
+              {punctIssues.map((issue) => (
+                <div key={issue.id} className="px-4 py-2.5 text-sm flex items-start gap-3">
+                  <span
+                    className={`shrink-0 px-1.5 py-0.5 rounded text-xs font-medium ${
+                      issue.severity === "error"
+                        ? "bg-red-50 text-red-700"
+                        : "bg-amber-50 text-amber-700"
+                    }`}
+                  >
+                    {issue.severity === "error" ? "错误" : "警告"}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-gray-700">{issue.message}</div>
+                    <div className="text-xs text-gray-500 mt-0.5">
+                      <span className="line-through">{issue.original}</span>
+                      <span className="mx-1">→</span>
+                      <span className="text-emerald-600 font-medium">{issue.suggestion}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
-      </div>
-      <div className="mt-4 flex gap-3">
-        <button className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">
-          一键修复所有格式问题
-        </button>
-        <button className="px-4 py-2 border border-gray-200 rounded-lg text-sm hover:bg-gray-50">
-          导出校对报告
-        </button>
       </div>
     </div>
   );
