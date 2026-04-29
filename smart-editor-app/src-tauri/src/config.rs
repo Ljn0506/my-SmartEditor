@@ -3,12 +3,12 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, Result};
-use crate::models::AiConfig;
+use crate::models::{AiConfig, AiProvider};
 
 /// 应用全局配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
-    pub ai_provider: String,
+    pub ai_provider: AiProvider,
     pub ai_base_url: String,
     pub ai_api_key: Option<String>,
     pub ai_model: String,
@@ -19,7 +19,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            ai_provider: "ollama".to_string(),
+            ai_provider: AiProvider::Ollama,
             ai_base_url: "http://localhost:11434".to_string(),
             ai_api_key: None,
             ai_model: "qwen2.5:14b".to_string(),
@@ -32,7 +32,7 @@ impl Default for AppConfig {
 impl AppConfig {
     pub fn to_ai_config(&self) -> AiConfig {
         AiConfig {
-            provider: self.ai_provider.clone(),
+            provider: self.ai_provider,
             base_url: self.ai_base_url.clone(),
             api_key: self.ai_api_key.clone(),
             model: self.ai_model.clone(),
@@ -42,7 +42,7 @@ impl AppConfig {
     #[allow(dead_code)]
     pub fn from_ai_config(ai: &AiConfig) -> Self {
         Self {
-            ai_provider: ai.provider.clone(),
+            ai_provider: ai.provider,
             ai_base_url: ai.base_url.clone(),
             ai_api_key: ai.api_key.clone(),
             ai_model: ai.model.clone(),
@@ -83,7 +83,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let cfg = AppConfig::default();
-        assert_eq!(cfg.ai_provider, "ollama");
+        assert_eq!(cfg.ai_provider, AiProvider::Ollama);
         assert_eq!(cfg.ai_base_url, "http://localhost:11434");
         assert_eq!(cfg.ai_model, "qwen2.5:14b");
         assert_eq!(cfg.meili_host, "http://localhost:7700");
@@ -94,7 +94,7 @@ mod tests {
     #[test]
     fn test_to_ai_config() {
         let app_cfg = AppConfig {
-            ai_provider: "claude".to_string(),
+            ai_provider: AiProvider::Claude,
             ai_base_url: "https://api.anthropic.com".to_string(),
             ai_api_key: Some("sk-test".to_string()),
             ai_model: "claude-3".to_string(),
@@ -102,7 +102,7 @@ mod tests {
             meili_api_key: None,
         };
         let ai_cfg = app_cfg.to_ai_config();
-        assert_eq!(ai_cfg.provider, "claude");
+        assert_eq!(ai_cfg.provider, AiProvider::Claude);
         assert_eq!(ai_cfg.base_url, "https://api.anthropic.com");
         assert_eq!(ai_cfg.api_key, Some("sk-test".to_string()));
         assert_eq!(ai_cfg.model, "claude-3");
@@ -115,7 +115,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let cfg = AppConfig {
-            ai_provider: "deepseek".to_string(),
+            ai_provider: AiProvider::DeepSeek,
             ai_base_url: "https://api.deepseek.com".to_string(),
             ai_api_key: Some("sk-deep".to_string()),
             ai_model: "deepseek-chat".to_string(),
@@ -127,7 +127,7 @@ mod tests {
         assert!(path.exists());
 
         let loaded = load_or_create(&path).unwrap();
-        assert_eq!(loaded.ai_provider, "deepseek");
+        assert_eq!(loaded.ai_provider, AiProvider::DeepSeek);
         assert_eq!(loaded.ai_base_url, "https://api.deepseek.com");
         assert_eq!(loaded.ai_api_key, Some("sk-deep".to_string()));
         assert_eq!(loaded.ai_model, "deepseek-chat");
@@ -145,7 +145,7 @@ mod tests {
         assert!(!path.exists());
         let cfg = load_or_create(&path).unwrap();
         assert!(path.exists());
-        assert_eq!(cfg.ai_provider, "ollama");
+        assert_eq!(cfg.ai_provider, AiProvider::Ollama);
 
         std::fs::remove_file(&path).unwrap();
     }

@@ -1,6 +1,8 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
 
+use crate::models::Severity;
+
 static RE_CONSECUTIVE_CN: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"([，。！？；：、]{2,})").unwrap());
 static RE_CN_ELLIPSIS: Lazy<Regex> =
@@ -13,7 +15,7 @@ static RE_FW_NUMBER: Lazy<Regex> = Lazy::new(|| Regex::new(r"[０-９]+").unwrap
 pub struct PunctuationIssue {
     pub id: i64,
     pub message: String,
-    pub severity: String, // "error" | "warning"
+    pub severity: Severity,
     pub original: String,
     pub suggestion: String,
     pub position: usize, // 字符位置（非字节位置）
@@ -54,7 +56,7 @@ fn check_mixed_punctuation(text: &str, issues: &mut Vec<PunctuationIssue>, mut i
                 issues.push(PunctuationIssue {
                     id,
                     message: format!("{}{}", msg, chn),
-                    severity: "warning".to_string(),
+                    severity: Severity::Warning,
                     original: ch.to_string(),
                     suggestion: chn.to_string(),
                     position: i,
@@ -72,7 +74,7 @@ fn check_mixed_punctuation(text: &str, issues: &mut Vec<PunctuationIssue>, mut i
                 issues.push(PunctuationIssue {
                     id,
                     message: "应使用中文括号".to_string(),
-                    severity: "warning".to_string(),
+                    severity: Severity::Warning,
                     original: ch.to_string(),
                     suggestion: sugg.to_string(),
                     position: i,
@@ -113,7 +115,7 @@ fn check_consecutive_punctuation(
             issues.push(PunctuationIssue {
                 id,
                 message: format!("连续出现多个{}", first),
-                severity: "error".to_string(),
+                severity: Severity::Error,
                 original: orig.to_string(),
                 suggestion: first.to_string(),
                 position: start,
@@ -131,7 +133,7 @@ fn check_consecutive_punctuation(
         issues.push(PunctuationIssue {
             id,
             message: "中文中应使用省略号……".to_string(),
-            severity: "warning".to_string(),
+            severity: Severity::Warning,
             original: orig,
             suggestion: sugg,
             position: start,
@@ -165,7 +167,7 @@ fn check_quote_pairs(text: &str, issues: &mut Vec<PunctuationIssue>, mut id: i64
             issues.push(PunctuationIssue {
                 id,
                 message: format!("{}未配对：左{}个，右{}个", name, open_count, close_count),
-                severity: "error".to_string(),
+                severity: Severity::Error,
                 original: format!("{}{}", open, close),
                 suggestion: format!("确保{}成对出现", name),
                 position: pos,
@@ -203,7 +205,7 @@ fn check_fullwidth_letters_numbers(
         issues.push(PunctuationIssue {
             id,
             message: "全角字母建议改为半角".to_string(),
-            severity: "warning".to_string(),
+            severity: Severity::Warning,
             original: orig.to_string(),
             suggestion: sugg,
             position: start,
@@ -228,7 +230,7 @@ fn check_fullwidth_letters_numbers(
         issues.push(PunctuationIssue {
             id,
             message: "全角数字建议改为半角".to_string(),
-            severity: "warning".to_string(),
+            severity: Severity::Warning,
             original: orig.to_string(),
             suggestion: sugg,
             position: start,

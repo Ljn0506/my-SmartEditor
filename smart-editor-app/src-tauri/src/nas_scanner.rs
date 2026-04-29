@@ -3,7 +3,7 @@ use std::path::Path;
 use walkdir::WalkDir;
 
 use crate::error::Result;
-use crate::models::{DocumentType, Template};
+use crate::models::{DocumentType, ProjectPhase, Template};
 use crate::parser::parse_document;
 
 const SUPPORTED_EXTS: &[&str] = &["docx", "pdf", "xlsx", "xls", "txt", "md"];
@@ -100,7 +100,8 @@ pub fn file_to_template(file_path: &str) -> Result<Template> {
         .unwrap_or_else(|| "未命名".to_string());
 
     let _doc_type = detect_document_type(&file_name);
-    let (doc_attr, business_domain, content_module) = infer_categories(&file_name, &text);
+    let (doc_attr, business_domain, content_module) =
+        crate::category::infer_categories(&file_name, &text);
 
     let tags = infer_tags(&file_name, &text);
 
@@ -113,7 +114,7 @@ pub fn file_to_template(file_path: &str) -> Result<Template> {
         business_domain,
         security_layer: None,
         content_module,
-        project_phase: Some("投标阶段".to_string()),
+        project_phase: Some(ProjectPhase::Bidding),
         tags,
         source_file: Some(file_path.to_string()),
         source_para_range: None,
@@ -122,56 +123,6 @@ pub fn file_to_template(file_path: &str) -> Result<Template> {
         use_count: 0,
         rating: 0,
     })
-}
-
-fn infer_categories(
-    file_name: &str,
-    _text: &str,
-) -> (Option<String>, Option<String>, Option<String>) {
-    let lower = file_name.to_lowercase();
-
-    let doc_attr = if lower.contains("投标") || lower.contains("应答") {
-        Some("投标应答".to_string())
-    } else if lower.contains("技术方案") || lower.contains("设计方案") {
-        Some("技术方案".to_string())
-    } else if lower.contains("实施") {
-        Some("实施方案".to_string())
-    } else if lower.contains("合同") || lower.contains("协议") {
-        Some("合同协议".to_string())
-    } else {
-        Some("汇报材料".to_string())
-    };
-
-    let business_domain = if lower.contains("等保") || lower.contains("等级保护") {
-        Some("网络安全".to_string())
-    } else if lower.contains("渗透") || lower.contains("漏洞") || lower.contains("代码审计")
-    {
-        Some("应用安全".to_string())
-    } else if lower.contains("数据") || lower.contains("数据库") || lower.contains("隐私") {
-        Some("数据安全".to_string())
-    } else if lower.contains("soc") || lower.contains("运营") || lower.contains("态势") {
-        Some("安全运营".to_string())
-    } else if lower.contains("管理") || lower.contains("制度") || lower.contains("体系") {
-        Some("安全管理".to_string())
-    } else {
-        Some("网络安全".to_string())
-    };
-
-    let content_module = if lower.contains("偏离") || lower.contains("差异") {
-        Some("偏离说明".to_string())
-    } else if lower.contains("资质") || lower.contains("证书") || lower.contains("业绩") {
-        Some("资质证明".to_string())
-    } else if lower.contains("案例") || lower.contains("项目经历") {
-        Some("案例介绍".to_string())
-    } else if lower.contains("实施") || lower.contains("计划") || lower.contains("进度") {
-        Some("实施计划".to_string())
-    } else if lower.contains("商务") || lower.contains("报价") || lower.contains("合同") {
-        Some("商务条款".to_string())
-    } else {
-        Some("技术方案".to_string())
-    };
-
-    (doc_attr, business_domain, content_module)
 }
 
 fn infer_tags(file_name: &str, text: &str) -> Vec<String> {
@@ -287,15 +238,26 @@ mod tests {
 
     #[test]
     fn test_infer_categories() {
-        let (doc_attr, domain, module) = infer_categories("等保2.0投标应答技术方案.docx", "");
-        assert_eq!(doc_attr, Some("投标应答".to_string()));
-        assert_eq!(domain, Some("网络安全".to_string()));
-        assert_eq!(module, Some("技术方案".to_string()));
+        let (doc_attr, domain, module) =
+            crate::category::infer_categories("等保2.0投标应答技术方案.docx", "");
+        assert_eq!(doc_attr, Some(crate::models::DocAttr::BidResponse));
+        assert_eq!(domain, Some(crate::models::BusinessDomain::NetworkSecurity));
+        assert_eq!(
+            module,
+            Some(crate::models::ContentModule::TechnicalProposal)
+        );
 
-        let (doc_attr2, domain2, module2) = infer_categories("偏离表-资质证书.xlsx", "");
-        assert_eq!(doc_attr2, Some("汇报材料".to_string()));
-        assert_eq!(domain2, Some("网络安全".to_string()));
-        assert_eq!(module2, Some("偏离说明".to_string()));
+        let (doc_attr2, domain2, module2) =
+            crate::category::infer_categories("偏离表-资质证书.xlsx", "");
+        assert_eq!(doc_attr2, Some(crate::models::DocAttr::ReportMaterial));
+        assert_eq!(
+            domain2,
+            Some(crate::models::BusinessDomain::NetworkSecurity)
+        );
+        assert_eq!(
+            module2,
+            Some(crate::models::ContentModule::DeviationExplanation)
+        );
     }
 
     #[test]

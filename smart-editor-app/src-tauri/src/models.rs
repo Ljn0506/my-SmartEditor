@@ -1,5 +1,163 @@
 use serde::{Deserialize, Serialize};
 
+macro_rules! define_enum {
+    ($name:ident { $($variant:ident = $str:literal),+ $(,)? }) => {
+        #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+        pub enum $name {
+            $(
+                #[serde(rename = $str)]
+                $variant,
+            )+
+        }
+
+        impl $name {
+            pub const fn as_str(&self) -> &'static str {
+                match self {
+                    $(Self::$variant => $str,)+
+                }
+            }
+
+            pub fn from_str(s: &str) -> Option<Self> {
+                match s {
+                    $($str => Some(Self::$variant),)+
+                    _ => None,
+                }
+            }
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.as_str())
+            }
+        }
+
+        impl rusqlite::types::ToSql for $name {
+            fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+                Ok(self.as_str().into())
+            }
+        }
+
+        impl rusqlite::types::FromSql for $name {
+            fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+                let s = value.as_str()?;
+                Self::from_str(s).ok_or_else(|| {
+                    rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("invalid {}: {}", stringify!($name), s),
+                    )))
+                })
+            }
+        }
+    };
+}
+
+define_enum!(DocAttr {
+    BidResponse = "投标应答",
+    TechnicalProposal = "技术方案",
+    ImplementationPlan = "实施方案",
+    ContractAgreement = "合同协议",
+    ReportMaterial = "汇报材料",
+});
+
+define_enum!(BusinessDomain {
+    NetworkSecurity = "网络安全",
+    ApplicationSecurity = "应用安全",
+    DataSecurity = "数据安全",
+    SecurityOperation = "安全运营",
+    SecurityManagement = "安全管理",
+});
+
+define_enum!(SecurityLayer {
+    Detection = "检测层",
+    Defense = "防御层",
+    Analysis = "分析层",
+    Governance = "治理层",
+});
+
+define_enum!(ContentModule {
+    TechnicalProposal = "技术方案",
+    BusinessTerms = "商务条款",
+    ImplementationPlan = "实施计划",
+    QualificationProof = "资质证明",
+    DeviationExplanation = "偏离说明",
+    CaseIntroduction = "案例介绍",
+});
+
+define_enum!(ProjectPhase {
+    Proposal = "方案阶段",
+    Bidding = "投标阶段",
+    Contract = "合同阶段",
+});
+
+define_enum!(AiProvider {
+    Ollama = "Ollama",
+    Claude = "Claude",
+    DeepSeek = "DeepSeek",
+});
+
+define_enum!(Severity {
+    Error = "Error",
+    Warning = "Warning",
+    Info = "Info",
+});
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RiskLevel {
+    #[serde(rename = "High")]
+    High,
+    #[serde(rename = "Medium")]
+    Medium,
+    #[serde(rename = "Low")]
+    Low,
+}
+
+#[allow(dead_code)]
+impl RiskLevel {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::High => "High",
+            Self::Medium => "Medium",
+            Self::Low => "Low",
+        }
+    }
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "High" => Some(Self::High),
+            "Medium" => Some(Self::Medium),
+            "Low" => Some(Self::Low),
+            _ => None,
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl std::fmt::Display for RiskLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+#[allow(dead_code)]
+impl rusqlite::types::ToSql for RiskLevel {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(self.as_str().into())
+    }
+}
+
+#[allow(dead_code)]
+impl rusqlite::types::FromSql for RiskLevel {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let s = value.as_str()?;
+        Self::from_str(s).ok_or_else(|| {
+            rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("invalid RiskLevel: {}", s),
+            )))
+        })
+    }
+}
+
 /// 文档类型：技术文档 vs 商务文档
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -15,16 +173,11 @@ pub struct Template {
     pub title: String,
     pub content: String,
     pub content_html: Option<String>,
-    /// 文档属性：投标应答、技术方案、实施方案、合同协议、汇报材料
-    pub doc_attr: Option<String>,
-    /// 业务领域：网络安全、应用安全、数据安全、安全运营、安全管理
-    pub business_domain: Option<String>,
-    /// 安全层级：检测层、防御层、分析层、治理层
-    pub security_layer: Option<String>,
-    /// 内容模块：技术方案、商务条款、实施计划、资质证明、偏离说明、案例介绍
-    pub content_module: Option<String>,
-    /// 项目阶段：方案阶段、投标阶段、合同阶段
-    pub project_phase: Option<String>,
+    pub doc_attr: Option<DocAttr>,
+    pub business_domain: Option<BusinessDomain>,
+    pub security_layer: Option<SecurityLayer>,
+    pub content_module: Option<ContentModule>,
+    pub project_phase: Option<ProjectPhase>,
     /// 标签列表
     pub tags: Vec<String>,
     /// 来源 NAS 文件路径
@@ -35,6 +188,22 @@ pub struct Template {
     pub updated_at: Option<String>,
     pub use_count: i64,
     pub rating: i64,
+}
+
+/// 模板查询过滤条件
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TemplateFilter {
+    pub doc_attr: Option<DocAttr>,
+    pub business_domain: Option<BusinessDomain>,
+    pub content_module: Option<ContentModule>,
+    pub project_phase: Option<ProjectPhase>,
+    pub keyword: Option<String>,
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+fn default_limit() -> usize {
+    50
 }
 
 /// 技术需求要点
@@ -101,10 +270,10 @@ pub struct SearchResult {
     pub id: String,
     pub title: String,
     pub content: String,
-    pub doc_attr: Option<String>,
-    pub business_domain: Option<String>,
-    pub content_module: Option<String>,
-    pub project_phase: Option<String>,
+    pub doc_attr: Option<DocAttr>,
+    pub business_domain: Option<BusinessDomain>,
+    pub content_module: Option<ContentModule>,
+    pub project_phase: Option<ProjectPhase>,
     pub tags: Vec<String>,
     pub relevance: f64,
 }
@@ -214,7 +383,7 @@ pub struct CheckItem {
 /// AI 配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiConfig {
-    pub provider: String, // "ollama" | "claude" | "deepseek"
+    pub provider: AiProvider,
     pub base_url: String,
     pub api_key: Option<String>,
     pub model: String,

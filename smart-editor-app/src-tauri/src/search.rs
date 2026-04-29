@@ -2,7 +2,7 @@ use meilisearch_sdk::client::Client;
 use meilisearch_sdk::settings::Settings;
 
 use crate::error::{AppError, Result};
-use crate::models::{SearchResult, Template};
+use crate::models::{BusinessDomain, ContentModule, DocAttr, ProjectPhase, SearchResult, Template};
 
 pub struct SearchEngine {
     client: Client,
@@ -76,10 +76,10 @@ struct SearchDoc {
     id: String,
     title: String,
     content: String,
-    doc_attr: Option<String>,
-    business_domain: Option<String>,
-    content_module: Option<String>,
-    project_phase: Option<String>,
+    doc_attr: Option<DocAttr>,
+    business_domain: Option<BusinessDomain>,
+    content_module: Option<ContentModule>,
+    project_phase: Option<ProjectPhase>,
     tags: Vec<String>,
 }
 

@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod ai;
+mod category;
 mod clipboard;
 mod config;
 mod db;
@@ -15,8 +16,8 @@ mod punctuation;
 mod search;
 
 use std::path::PathBuf;
-use std::sync::Mutex;
-use tauri::Manager;
+use std::sync::{Arc, Mutex};
+use tauri::{Emitter, Manager};
 
 use crate::ai::AiClient;
 use crate::db::Database;
@@ -29,10 +30,17 @@ use crate::nas_scanner::{scan_directory, ImportResult};
 use crate::search::SearchEngine;
 
 pub struct AppState {
-    db: Mutex<Database>,
+    db: Arc<Mutex<Database>>,
     search: Option<SearchEngine>,
-    ai: AiClient,
+    ai: Mutex<AiClient>,
     config_path: PathBuf,
+}
+
+impl AppState {
+    fn ai_client(&self) -> Result<AiClient, String> {
+        let guard = self.ai.lock().unwrap_or_else(|e| e.into_inner());
+        Ok(guard.clone())
+    }
 }
 
 // --- 文档解析命令 ---
@@ -65,9 +73,8 @@ async fn parse_and_extract(
     file_path: String,
 ) -> Result<ParsedRequirements, String> {
     let parsed = parse_requirement_file(file_path).map_err(|e| e.to_string())?;
-    state
-        .ai
-        .extract_requirements(&parsed.text, parsed.document_type)
+    let ai = state.ai_client()?;
+    ai.extract_requirements(&parsed.text, parsed.document_type)
         .await
         .map_err(|e| e.to_string())
 }
@@ -75,62 +82,88 @@ async fn parse_and_extract(
 // --- 模板库命令 ---
 
 #[tauri::command]
-fn create_template(
+async fn create_template(
     state: tauri::State<'_, AppState>,
     mut template: Template,
 ) -> Result<i64, String> {
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.insert_template(&mut template).map_err(|e| e.to_string())
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || {
+        let db = db.lock().map_err(|e| e.to_string())?;
+        db.insert_template(&mut template).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn get_template(state: tauri::State<'_, AppState>, id: i64) -> Result<Option<Template>, String> {
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.get_template(id).map_err(|e| e.to_string())
+async fn get_template(
+    state: tauri::State<'_, AppState>,
+    id: i64,
+) -> Result<Option<Template>, String> {
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || {
+        let db = db.lock().map_err(|e| e.to_string())?;
+        db.get_template(id).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn update_template(state: tauri::State<'_, AppState>, template: Template) -> Result<(), String> {
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.update_template(&template).map_err(|e| e.to_string())
+async fn update_template(
+    state: tauri::State<'_, AppState>,
+    template: Template,
+) -> Result<(), String> {
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || {
+        let db = db.lock().map_err(|e| e.to_string())?;
+        db.update_template(&template).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn delete_template(state: tauri::State<'_, AppState>, id: i64) -> Result<(), String> {
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.delete_template(id).map_err(|e| e.to_string())
+async fn delete_template(state: tauri::State<'_, AppState>, id: i64) -> Result<(), String> {
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || {
+        let db = db.lock().map_err(|e| e.to_string())?;
+        db.delete_template(id).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn list_all_templates(
+async fn list_all_templates(
     state: tauri::State<'_, AppState>,
     limit: Option<usize>,
 ) -> Result<Vec<Template>, String> {
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.search_templates(None, None, None, None, None, limit.unwrap_or(1000))
-        .map_err(|e| e.to_string())
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || {
+        let db = db.lock().map_err(|e| e.to_string())?;
+        let filter = crate::models::TemplateFilter {
+            limit: limit.unwrap_or(1000),
+            ..Default::default()
+        };
+        db.search_templates(&filter).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn search_templates_db(
+async fn search_templates_db(
     state: tauri::State<'_, AppState>,
-    doc_attr: Option<String>,
-    business_domain: Option<String>,
-    content_module: Option<String>,
-    project_phase: Option<String>,
-    keyword: Option<String>,
-    limit: Option<usize>,
+    filter: crate::models::TemplateFilter,
 ) -> Result<Vec<Template>, String> {
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.search_templates(
-        doc_attr.as_deref(),
-        business_domain.as_deref(),
-        content_module.as_deref(),
-        project_phase.as_deref(),
-        keyword.as_deref(),
-        limit.unwrap_or(50),
-    )
-    .map_err(|e| e.to_string())
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || {
+        let db = db.lock().map_err(|e| e.to_string())?;
+        db.search_templates(&filter).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // --- Meilisearch 命令 ---
@@ -187,10 +220,14 @@ fn get_ai_config(state: tauri::State<'_, AppState>) -> Result<AiConfig, String> 
 fn update_ai_config(state: tauri::State<'_, AppState>, ai: AiConfig) -> Result<(), String> {
     let mut app_config = config::load_or_create(&state.config_path).map_err(|e| e.to_string())?;
     app_config.ai_provider = ai.provider;
-    app_config.ai_base_url = ai.base_url;
-    app_config.ai_api_key = ai.api_key;
-    app_config.ai_model = ai.model;
+    app_config.ai_base_url = ai.base_url.clone();
+    app_config.ai_api_key = ai.api_key.clone();
+    app_config.ai_model = ai.model.clone();
     config::save(&state.config_path, &app_config).map_err(|e| e.to_string())?;
+    let new_ai = AiClient::new(ai);
+    if let Ok(mut guard) = state.ai.lock() {
+        *guard = new_ai;
+    }
     Ok(())
 }
 
@@ -200,9 +237,8 @@ async fn extract_requirements(
     text: String,
     doc_type: DocumentType,
 ) -> Result<ParsedRequirements, String> {
-    state
-        .ai
-        .extract_requirements(&text, doc_type)
+    let ai = state.ai_client()?;
+    ai.extract_requirements(&text, doc_type)
         .await
         .map_err(|e| e.to_string())
 }
@@ -214,9 +250,8 @@ async fn generate_draft(
     references: Vec<String>,
     doc_type: DocumentType,
 ) -> Result<String, String> {
-    state
-        .ai
-        .generate_draft(&requirements, &references, doc_type)
+    let ai = state.ai_client()?;
+    ai.generate_draft(&requirements, &references, doc_type)
         .await
         .map_err(|e| e.to_string())
 }
@@ -230,34 +265,83 @@ fn scan_nas_directory(path: String) -> Result<Vec<String>, String> {
 
 #[tauri::command]
 async fn import_nas_files(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     paths: Vec<String>,
 ) -> Result<ImportResult, String> {
-    let mut templates = Vec::new();
-    let mut failed_files = Vec::new();
+    let total = paths.len();
+    let app_emit = app.clone();
 
-    for path in &paths {
-        match nas_scanner::file_to_template(path) {
-            Ok(t) => templates.push(t),
-            Err(e) => {
-                log::error!("解析文件失败 {}: {}", path, e);
-                failed_files.push(path.clone());
+    // 1. rayon 并行解析文件（CPU-bound）+ 流式进度
+    let progress = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (templates, mut failed_files) = tokio::task::spawn_blocking(move || {
+        use rayon::prelude::*;
+        let results: Vec<(Option<Template>, Option<String>)> = paths
+            .into_par_iter()
+            .map(|path| {
+                let result = nas_scanner::file_to_template(&path);
+                let current = progress.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                if current % 5 == 0 || current == total {
+                    let _ = app_emit.emit(
+                        "import_progress",
+                        serde_json::json!({
+                            "current": current,
+                            "total": total,
+                            "phase": "parse",
+                            "file": path,
+                        }),
+                    );
+                }
+                match result {
+                    Ok(t) => (Some(t), None),
+                    Err(e) => {
+                        log::error!("解析文件失败 {}: {}", path, e);
+                        (None, Some(path))
+                    }
+                }
+            })
+            .collect();
+        let mut templates = Vec::new();
+        let mut failed = Vec::new();
+        for (t, f) in results {
+            if let Some(t) = t {
+                templates.push(t);
+            }
+            if let Some(f) = f {
+                failed.push(f);
             }
         }
-    }
+        (templates, failed)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
-    // 入库 SQLite
-    {
-        let db = state.db.lock().map_err(|e| e.to_string())?;
-        for t in &mut templates {
-            if let Err(e) = db.insert_template(t) {
+    // 2. spawn_blocking 入库 SQLite（IO-bound，不卡 IPC）
+    let db = state.db.clone();
+    let templates_for_db = templates.clone();
+    let sqlite_failed = tokio::task::spawn_blocking(move || {
+        let mut sqlite_failed = Vec::new();
+        let db = match db.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                log::error!("获取数据库锁失败: {}", e);
+                return sqlite_failed;
+            }
+        };
+        for mut t in templates_for_db {
+            if let Err(e) = db.insert_template(&mut t) {
                 log::error!("SQLite 入库失败: {}", e);
                 if let Some(ref path) = t.source_file {
-                    failed_files.push(path.clone());
+                    sqlite_failed.push(path.clone());
                 }
             }
         }
-    }
+        sqlite_failed
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    failed_files.extend(sqlite_failed);
 
     // 过滤出成功入库且有 id 的模板，用于 Meilisearch 索引
     let templates_to_index: Vec<Template> = templates
@@ -269,6 +353,10 @@ async fn import_nas_files(
         .collect();
 
     if !templates_to_index.is_empty() {
+        let _ = app.emit(
+            "import_progress",
+            serde_json::json!({ "current": total, "total": total, "phase": "index" }),
+        );
         if let Some(search) = state.search.as_ref() {
             if let Err(e) = search.add_or_update_templates(&templates_to_index).await {
                 log::error!("Meilisearch 索引失败: {}", e);
@@ -392,9 +480,9 @@ fn main() {
             let ai = AiClient::new(app_config.to_ai_config());
 
             app.manage(AppState {
-                db: Mutex::new(db),
+                db: Arc::new(Mutex::new(db)),
                 search,
-                ai,
+                ai: Mutex::new(ai),
                 config_path,
             });
             Ok(())

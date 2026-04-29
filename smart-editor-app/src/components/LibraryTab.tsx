@@ -12,26 +12,31 @@ import {
   Filter,
 } from "lucide-react";
 
+type DocAttr = "投标应答" | "技术方案" | "实施方案" | "合同协议" | "汇报材料";
+type BusinessDomain = "网络安全" | "应用安全" | "数据安全" | "安全运营" | "安全管理";
+type ContentModule = "技术方案" | "商务条款" | "实施计划" | "资质证明" | "偏离说明" | "案例介绍";
+type ProjectPhase = "方案阶段" | "投标阶段" | "合同阶段";
+
 interface Template {
   id?: number | string;
   title: string;
   content: string;
   content_html?: string;
-  doc_attr?: string;
-  business_domain?: string;
+  doc_attr?: DocAttr;
+  business_domain?: BusinessDomain;
   security_layer?: string;
-  content_module?: string;
-  project_phase?: string;
+  content_module?: ContentModule;
+  project_phase?: ProjectPhase;
   tags: string[];
   use_count: number;
   rating: number;
 }
 
 interface Filters {
-  doc_attr: string;
-  business_domain: string;
-  content_module: string;
-  project_phase: string;
+  doc_attr: DocAttr | "全部";
+  business_domain: BusinessDomain | "全部";
+  content_module: ContentModule | "全部";
+  project_phase: ProjectPhase | "全部";
 }
 
 const dimensions = [
@@ -187,6 +192,7 @@ export default function LibraryTab({ editor }: { editor: Editor | null }) {
                     onClick={() =>
                       setFilters((prev) => ({ ...prev, [dim.key]: opt }))
                     }
+                    aria-pressed={active}
                     className={`w-full text-left px-2.5 py-1 rounded text-sm transition-colors ${
                       active
                         ? "bg-blue-50 text-blue-600 font-medium"
@@ -217,6 +223,7 @@ export default function LibraryTab({ editor }: { editor: Editor | null }) {
                 value={keyword}
                 onChange={(e) => handleSearchChange(e.target.value)}
                 placeholder="搜索标题、内容、标签..."
+                aria-label="搜索模板"
                 className="w-full pl-9 pr-4 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
@@ -318,7 +325,7 @@ export default function LibraryTab({ editor }: { editor: Editor | null }) {
 
       {/* 预览弹窗 */}
       {preview && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-white rounded-xl shadow-xl w-[640px] max-h-[80vh] flex flex-col">
             <div className="px-5 py-3 border-b border-gray-200 flex items-center justify-between">
               <h3 className="font-semibold text-sm">{preview.title}</h3>
@@ -334,7 +341,11 @@ export default function LibraryTab({ editor }: { editor: Editor | null }) {
                 dangerouslySetInnerHTML={{
                   __html:
                     preview.content_html ||
-                    `<p>${preview.content.replace(/\n/g, "<br/>")}</p>`,
+                    `<p>${preview.content
+                      .replace(/&/g, "&amp;")
+                      .replace(/</g, "&lt;")
+                      .replace(/>/g, "&gt;")
+                      .replace(/\n/g, "<br/>")}</p>`,
                 }}
               />
             </div>

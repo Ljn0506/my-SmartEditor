@@ -34,6 +34,7 @@ function ToolbarButton({
     <button
       onClick={onClick}
       title={title}
+      aria-label={title}
       className={`p-1.5 rounded transition-colors ${
         active
           ? "bg-blue-100 text-blue-600"

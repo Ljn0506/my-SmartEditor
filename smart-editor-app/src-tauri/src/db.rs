@@ -91,12 +91,7 @@ impl Database {
 
     pub fn search_templates(
         &self,
-        doc_attr: Option<&str>,
-        business_domain: Option<&str>,
-        content_module: Option<&str>,
-        project_phase: Option<&str>,
-        keyword: Option<&str>,
-        limit: usize,
+        filter: &crate::models::TemplateFilter,
     ) -> Result<Vec<Template>> {
         let mut sql = String::from(
             "SELECT id, title, content, content_html, doc_attr, business_domain,
@@ -106,29 +101,30 @@ impl Database {
         );
         let mut owned_params: Vec<String> = Vec::new();
 
-        if let Some(v) = doc_attr {
+        if let Some(v) = &filter.doc_attr {
             sql.push_str(" AND doc_attr = ?");
             owned_params.push(v.to_string());
         }
-        if let Some(v) = business_domain {
+        if let Some(v) = &filter.business_domain {
             sql.push_str(" AND business_domain = ?");
             owned_params.push(v.to_string());
         }
-        if let Some(v) = content_module {
+        if let Some(v) = &filter.content_module {
             sql.push_str(" AND content_module = ?");
             owned_params.push(v.to_string());
         }
-        if let Some(v) = project_phase {
+        if let Some(v) = &filter.project_phase {
             sql.push_str(" AND project_phase = ?");
             owned_params.push(v.to_string());
         }
-        if let Some(kw) = keyword {
+        if let Some(kw) = &filter.keyword {
             sql.push_str(" AND (title LIKE ? OR content LIKE ?)");
             let like = format!("%{}%", kw);
             owned_params.push(like.clone());
             owned_params.push(like);
         }
         // LIMIT 直接嵌入 SQL（usize 来自 Rust 内部，安全）
+        let limit = filter.limit.min(1000);
         sql.push_str(&format!(
             " ORDER BY use_count DESC, rating DESC LIMIT {}",
             limit
@@ -212,6 +208,7 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{BusinessDomain, ContentModule, DocAttr, ProjectPhase, SecurityLayer};
 
     fn create_test_db() -> Database {
         Database::new(":memory:").unwrap()
@@ -223,11 +220,11 @@ mod tests {
             title: "等保2.0技术方案".to_string(),
             content: "这是一份技术方案内容".to_string(),
             content_html: Some("<p>这是一份技术方案内容</p>".to_string()),
-            doc_attr: Some("技术方案".to_string()),
-            business_domain: Some("网络安全".to_string()),
-            security_layer: Some("防御层".to_string()),
-            content_module: Some("技术方案".to_string()),
-            project_phase: Some("投标阶段".to_string()),
+            doc_attr: Some(DocAttr::TechnicalProposal),
+            business_domain: Some(BusinessDomain::NetworkSecurity),
+            security_layer: Some(SecurityLayer::Defense),
+            content_module: Some(ContentModule::TechnicalProposal),
+            project_phase: Some(ProjectPhase::Bidding),
             tags: vec!["等保".to_string(), "三级".to_string()],
             source_file: Some("/tmp/test.docx".to_string()),
             source_para_range: None,
@@ -248,7 +245,7 @@ mod tests {
         let fetched = db.get_template(id).unwrap().unwrap();
         assert_eq!(fetched.title, "等保2.0技术方案");
         assert_eq!(fetched.content, "这是一份技术方案内容");
-        assert_eq!(fetched.doc_attr, Some("技术方案".to_string()));
+        assert_eq!(fetched.doc_attr, Some(DocAttr::TechnicalProposal));
         assert_eq!(fetched.tags, vec!["等保", "三级"]);
         assert_eq!(fetched.use_count, 5);
         assert_eq!(fetched.rating, 4);
@@ -267,12 +264,20 @@ mod tests {
         db.insert_template(&mut tmpl).unwrap();
 
         let results = db
-            .search_templates(Some("技术方案"), None, None, None, None, 10)
+            .search_templates(&crate::models::TemplateFilter {
+                doc_attr: Some(DocAttr::TechnicalProposal),
+                limit: 10,
+                ..Default::default()
+            })
             .unwrap();
         assert_eq!(results.len(), 1);
 
         let results = db
-            .search_templates(Some("投标应答"), None, None, None, None, 10)
+            .search_templates(&crate::models::TemplateFilter {
+                doc_attr: Some(DocAttr::BidResponse),
+                limit: 10,
+                ..Default::default()
+            })
             .unwrap();
         assert!(results.is_empty());
     }
@@ -284,12 +289,20 @@ mod tests {
         db.insert_template(&mut tmpl).unwrap();
 
         let results = db
-            .search_templates(None, None, None, None, Some("技术方案"), 10)
+            .search_templates(&crate::models::TemplateFilter {
+                keyword: Some("技术方案".to_string()),
+                limit: 10,
+                ..Default::default()
+            })
             .unwrap();
         assert_eq!(results.len(), 1);
 
         let results = db
-            .search_templates(None, None, None, None, Some("不存在的关键词"), 10)
+            .search_templates(&crate::models::TemplateFilter {
+                keyword: Some("不存在的关键词".to_string()),
+                limit: 10,
+                ..Default::default()
+            })
             .unwrap();
         assert!(results.is_empty());
     }
@@ -303,7 +316,10 @@ mod tests {
             db.insert_template(&mut tmpl).unwrap();
         }
         let results = db
-            .search_templates(None, None, None, None, None, 3)
+            .search_templates(&crate::models::TemplateFilter {
+                limit: 3,
+                ..Default::default()
+            })
             .unwrap();
         assert_eq!(results.len(), 3);
     }

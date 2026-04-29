@@ -4,6 +4,7 @@ use serde_json::json;
 use crate::error::{AppError, Result};
 use crate::models::{AiConfig, DocumentType, ParsedRequirements};
 
+#[derive(Clone)]
 pub struct AiClient {
     config: AiConfig,
     http: reqwest::Client,
@@ -32,7 +33,10 @@ impl AiClient {
         let response = self.chat(&prompt).await?;
         // 尝试从 AI 返回中提取 JSON 部分
         let json_str = extract_json(&response)?;
-        let parsed: ParsedRequirements = serde_json::from_str(json_str)?;
+        let parsed: ParsedRequirements = serde_json::from_str(json_str)
+            .map_err(|e| AppError::Ai(format!("AI 返回 JSON 解析失败: {}", e)))?;
+        validate_requirements(&parsed)
+            .map_err(|e| AppError::Ai(format!("AI 返回内容校验失败: {}", e)))?;
         Ok(parsed)
     }
 
@@ -51,28 +55,45 @@ impl AiClient {
     }
 
     async fn chat(&self, prompt: &str) -> Result<String> {
-        match self.config.provider.as_str() {
-            "ollama" => self.chat_ollama(prompt).await,
-            "claude" => self.chat_claude(prompt).await,
-            "deepseek" => self.chat_deepseek(prompt).await,
-            _ => Err(AppError::Ai(format!(
-                "不支持的 AI 提供商: {}",
-                self.config.provider
-            ))),
+        match self.config.provider {
+            crate::models::AiProvider::Ollama => self.chat_ollama(prompt).await,
+            crate::models::AiProvider::Claude => self.chat_claude(prompt).await,
+            crate::models::AiProvider::DeepSeek => self.chat_deepseek(prompt).await,
         }
     }
 
     async fn chat_ollama(&self, prompt: &str) -> Result<String> {
         let url = format!("{}/api/generate", self.config.base_url);
-        let body = json!({
-            "model": self.config.model,
-            "prompt": prompt,
-            "stream": false,
-        });
+        let data = self
+            .chat_post_json(
+                &url,
+                vec![],
+                json!({
+                    "model": self.config.model,
+                    "prompt": prompt,
+                    "stream": false,
+                }),
+            )
+            .await?;
+        let resp: OllamaResponse = serde_json::from_value(data)
+            .map_err(|e| AppError::Ai(format!("Ollama 响应解析失败: {}", e)))?;
+        Ok(resp.response)
+    }
 
-        let res = self.http.post(&url).json(&body).send().await?;
-        let data: OllamaResponse = res.json().await?;
-        Ok(data.response)
+    async fn chat_post_json(
+        &self,
+        url: &str,
+        headers: Vec<(&str, String)>,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let mut req = self.http.post(url).json(&body);
+        for (k, v) in headers {
+            req = req.header(k, v);
+        }
+        let res = req.send().await?;
+        let res = res.error_for_status()
+            .map_err(|e| AppError::Ai(format!("AI 请求失败: {}", e)))?;
+        Ok(res.json().await?)
     }
 
     async fn chat_claude(&self, prompt: &str) -> Result<String> {
@@ -81,27 +102,26 @@ impl AiClient {
             .api_key
             .as_ref()
             .ok_or_else(|| AppError::Ai("Claude API Key 未配置".to_string()))?;
-
-        let res = self
-            .http
-            .post("https://api.anthropic.com/v1/messages")
-            .header("x-api-key", api_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
-            .json(&json!({
+        self.chat_api_compatible(
+            "https://api.anthropic.com/v1/messages",
+            vec![
+                ("x-api-key", api_key.clone()),
+                ("anthropic-version", "2023-06-01".to_string()),
+            ],
+            json!({
                 "model": self.config.model,
                 "max_tokens": 4096,
                 "messages": [{"role": "user", "content": prompt}],
-            }))
-            .send()
-            .await?;
-
-        let data: ClaudeResponse = res.json().await?;
-        Ok(data
-            .content
-            .first()
-            .map(|c| c.text.clone())
-            .unwrap_or_default())
+            }),
+            |data| {
+                data.get("content")?
+                    .as_array()?
+                    .first()?
+                    .get("text")?
+                    .as_str()
+            },
+        )
+        .await
     }
 
     async fn chat_deepseek(&self, prompt: &str) -> Result<String> {
@@ -110,25 +130,37 @@ impl AiClient {
             .api_key
             .as_ref()
             .ok_or_else(|| AppError::Ai("DeepSeek API Key 未配置".to_string()))?;
-
-        let res = self
-            .http
-            .post(format!("{}/chat/completions", self.config.base_url))
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("content-type", "application/json")
-            .json(&json!({
+        self.chat_api_compatible(
+            &format!("{}/chat/completions", self.config.base_url),
+            vec![("Authorization", format!("Bearer {}", api_key))],
+            json!({
                 "model": self.config.model,
                 "messages": [{"role": "user", "content": prompt}],
-            }))
-            .send()
-            .await?;
+            }),
+            |data| {
+                data.get("choices")?
+                    .as_array()?
+                    .first()?
+                    .get("message")?
+                    .get("content")?
+                    .as_str()
+            },
+        )
+        .await
+    }
 
-        let data: DeepSeekResponse = res.json().await?;
-        Ok(data
-            .choices
-            .first()
-            .map(|c| c.message.content.clone())
-            .unwrap_or_default())
+    async fn chat_api_compatible(
+        &self,
+        url: &str,
+        mut headers: Vec<(&str, String)>,
+        body: serde_json::Value,
+        extract: impl FnOnce(&serde_json::Value) -> Option<&str>,
+    ) -> Result<String> {
+        headers.push(("content-type", "application/json".to_string()));
+        let data = self.chat_post_json(url, headers, body).await?;
+        extract(&data)
+            .map(|s| s.to_string())
+            .ok_or_else(|| AppError::Ai("AI 响应中未找到内容".to_string()))
     }
 }
 
@@ -248,34 +280,52 @@ fn extract_json(text: &str) -> Result<&str> {
     Err(AppError::Parse("AI 返回中未找到 JSON 内容".to_string()))
 }
 
+fn validate_requirements(parsed: &crate::models::ParsedRequirements) -> Result<()> {
+    if parsed.requirements.is_empty()
+        && parsed.business_requirements.is_empty()
+        && parsed.compliance_items.is_empty()
+        && parsed.scoring_criteria.is_empty()
+        && parsed.commitments.is_empty()
+    {
+        return Err(AppError::Validation(
+            "AI 返回的需求列表为空，请检查文档内容或重试".to_string(),
+        ));
+    }
+    for req in &parsed.requirements {
+        if req.id <= 0 {
+            return Err(AppError::Validation(format!(
+                "需求项 ID 必须为正整数，收到: {}",
+                req.id
+            )));
+        }
+        if req.text.trim().is_empty() {
+            return Err(AppError::Validation(
+                "需求项 text 不能为空".to_string(),
+            ));
+        }
+    }
+    for req in &parsed.business_requirements {
+        if req.id <= 0 {
+            return Err(AppError::Validation(format!(
+                "商务需求项 ID 必须为正整数，收到: {}",
+                req.id
+            )));
+        }
+    }
+    for item in &parsed.compliance_items {
+        if item.id <= 0 {
+            return Err(AppError::Validation(format!(
+                "符合性审查项 ID 必须为正整数，收到: {}",
+                item.id
+            )));
+        }
+    }
+    Ok(())
+}
+
 // --- API Response Types ---
 
 #[derive(Debug, Deserialize)]
 struct OllamaResponse {
     response: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ClaudeResponse {
-    content: Vec<ClaudeContent>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-struct ClaudeContent {
-    text: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct DeepSeekResponse {
-    choices: Vec<DeepSeekChoice>,
-}
-
-#[derive(Debug, Deserialize)]
-struct DeepSeekChoice {
-    message: DeepSeekMessage,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-struct DeepSeekMessage {
-    content: String,
 }

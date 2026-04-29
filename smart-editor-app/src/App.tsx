@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   Upload,
@@ -9,13 +10,14 @@ import {
   Settings,
   FileText,
   ClipboardCopy,
-  AlertTriangle,
-  Download,
-  Trash2,
-  Play,
 } from "lucide-react";
 import TiptapEditor from "./components/TiptapEditor";
 import LibraryTab from "./components/LibraryTab";
+import DeviationPanel, {
+  type DeviationReport,
+  type FatalRisk,
+} from "./components/DeviationPanel";
+import PunctuationPanel, { type PunctuationIssue } from "./components/PunctuationPanel";
 
 // 标签页类型
 type TabKey = "upload" | "library" | "push" | "check" | "settings";
@@ -32,6 +34,32 @@ function App() {
   const [activeTab, setActiveTab] = useState<TabKey>("upload");
   const [editor, setEditor] = useState<any>(null);
   const [copyToast, setCopyToast] = useState<string | null>(null);
+  const [importProgress, setImportProgress] = useState<{ current: number; total: number; phase: string } | null>(null);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen("import_progress", (event: any) => {
+      const payload = event.payload as { current: number; total: number; phase: string };
+      setImportProgress((prev) => {
+        if (prev && prev.current === payload.current && prev.phase === payload.phase) {
+          return prev;
+        }
+        return payload;
+      });
+      if (payload.current >= payload.total && payload.phase === "index") {
+        setTimeout(() => setImportProgress(null), 3000);
+      }
+    })
+      .then((f) => {
+        unlisten = f;
+      })
+      .catch(() => {
+        // 非 Tauri 环境（如测试），忽略
+      });
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
 
   const handleCopy = async () => {
     if (!editor) return;
@@ -101,8 +129,35 @@ function App() {
 
       {/* 复制提示 Toast */}
       {copyToast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg bg-gray-800 text-white text-sm shadow-lg z-50">
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg bg-gray-800 text-white text-sm shadow-lg z-50"
+        >
           {copyToast}
+        </div>
+      )}
+
+      {/* NAS 导入进度 */}
+      {importProgress && (
+        <div
+          role="progressbar"
+          aria-valuenow={importProgress.current}
+          aria-valuemin={0}
+          aria-valuemax={importProgress.total}
+          aria-label="导入进度"
+          className="fixed bottom-16 left-1/2 -translate-x-1/2 w-64 bg-white rounded-lg shadow-lg border border-gray-200 p-3 z-50"
+        >
+          <div className="text-xs text-gray-600 mb-1.5 flex justify-between">
+            <span>{importProgress.phase === "parse" ? "正在解析文件..." : "正在建立索引..."}</span>
+            <span>{importProgress.current}/{importProgress.total}</span>
+          </div>
+          <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-blue-500 transition-all duration-300"
+              style={{ width: `${Math.min(100, (importProgress.current / importProgress.total) * 100)}%` }}
+            />
+          </div>
         </div>
       )}
     </div>
@@ -112,6 +167,10 @@ function App() {
 // ========== 需求上传标签页 ==========
 function UploadTab() {
   const [isDragging, setIsDragging] = useState(false);
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [parsedText, setParsedText] = useState<string>("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [requirements, setRequirements] = useState<
     { id: number; text: string; checked: boolean; category: string }[]
   >([
@@ -128,6 +187,53 @@ function UploadTab() {
     );
   };
 
+  const handleParseFile = async (filePath: string, name: string) => {
+    setIsLoading(true);
+    setError(null);
+    setParsedText("");
+    try {
+      const text: string = await invoke("parse_document", { filePath });
+      setFileName(name);
+      setParsedText(text);
+    } catch (e: any) {
+      setError(`解析失败: ${String(e)}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const files = e.dataTransfer.files;
+    if (files.length === 0) return;
+    const file = files[0];
+    // Tauri 桌面环境中 File 对象可能暴露 path 属性
+    const path = (file as any).path;
+    if (path) {
+      await handleParseFile(path, file.name);
+    } else {
+      setError("无法获取文件路径，请使用点击选择文件");
+    }
+  };
+
+  const handleSelect = async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [
+          { name: "文档", extensions: ["docx", "doc", "pdf", "xlsx", "txt"] },
+        ],
+      });
+      if (selected && typeof selected === "string") {
+        const name = selected.split("/").pop() || selected;
+        await handleParseFile(selected, name);
+      }
+    } catch (e: any) {
+      setError(`选择文件失败: ${String(e)}`);
+    }
+  };
+
   return (
     <div className="h-full overflow-auto p-6 space-y-6">
       {/* 文件上传区 */}
@@ -137,14 +243,18 @@ function UploadTab() {
           需求文件上传
         </h2>
         <div
+          role="button"
+          tabIndex={0}
           onDragEnter={() => setIsDragging(true)}
           onDragLeave={() => setIsDragging(false)}
           onDragOver={(e) => e.preventDefault()}
-          onDrop={(e) => {
-            e.preventDefault();
-            setIsDragging(false);
-            // TODO: 调用 Rust 后端解析文件
-            console.log("Dropped files:", e.dataTransfer.files);
+          onDrop={handleDrop}
+          onClick={handleSelect}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              handleSelect();
+            }
           }}
           className={`border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-colors ${
             isDragging
@@ -153,12 +263,38 @@ function UploadTab() {
           }`}
         >
           <FileText size={40} className="mx-auto text-gray-400 mb-3" />
-          <p className="text-gray-600 font-medium">拖入文件到这里 或 点击选择</p>
-          <p className="text-gray-400 text-sm mt-1">
-            支持: .docx .doc .pdf .xlsx .txt
-          </p>
+          {isLoading ? (
+            <p className="text-blue-600 font-medium">正在解析文件...</p>
+          ) : fileName ? (
+            <>
+              <p className="text-gray-800 font-medium">{fileName}</p>
+              <p className="text-gray-400 text-sm mt-1">点击重新选择文件</p>
+            </>
+          ) : (
+            <>
+              <p className="text-gray-600 font-medium">拖入文件到这里 或 点击选择</p>
+              <p className="text-gray-400 text-sm mt-1">
+                支持: .docx .doc .pdf .xlsx .txt
+              </p>
+            </>
+          )}
         </div>
+        {error && (
+          <p className="mt-2 text-sm text-red-600">{error}</p>
+        )}
       </section>
+
+      {/* 解析结果预览 */}
+      {parsedText && (
+        <section>
+          <h2 className="text-base font-semibold mb-3">解析结果预览</h2>
+          <div className="bg-gray-50 rounded-lg border border-gray-200 p-4 max-h-64 overflow-auto">
+            <pre className="text-xs text-gray-700 whitespace-pre-wrap font-mono leading-relaxed">
+              {parsedText.length > 2000 ? parsedText.slice(0, 2000) + "\n...（内容过长，已截断）" : parsedText}
+            </pre>
+          </div>
+        </section>
+      )}
 
       {/* 需求要点提取 */}
       <section>
@@ -249,67 +385,6 @@ function PushTab() {
   );
 }
 
-// ========== 偏离检查面板 ==========
-
-type DeviationStatus = "None" | "Positive" | "Minor" | "Major";
-
-interface DeviationCheckResult {
-  id: number;
-  section: string;
-  requirement_text: string;
-  response_text: string | null;
-  status: DeviationStatus;
-  risk_level: string;
-  explanation: string;
-  suggestion: string;
-}
-
-interface DeviationReport {
-  total: number;
-  none_count: number;
-  positive_count: number;
-  minor_count: number;
-  major_count: number;
-  fatal_risk_count: number;
-  items: DeviationCheckResult[];
-}
-
-interface FatalRisk {
-  category: string;
-  description: string;
-  risk_level: string;
-  suggestion: string;
-}
-
-interface PunctuationIssue {
-  id: number;
-  message: string;
-  severity: string;
-  original: string;
-  suggestion: string;
-  position: number;
-}
-
-function statusLabel(s: DeviationStatus): string {
-  const map: Record<DeviationStatus, string> = {
-    None: "完全响应",
-    Positive: "正偏离",
-    Minor: "轻微偏离",
-    Major: "重大偏离",
-  };
-  return map[s];
-}
-
-function statusColor(s: DeviationStatus): string {
-  const map: Record<DeviationStatus, string> = {
-    None: "bg-green-50 text-green-700 border-green-200",
-    Positive: "bg-blue-50 text-blue-700 border-blue-200",
-    Minor: "bg-amber-50 text-amber-700 border-amber-200",
-    Major: "bg-red-50 text-red-700 border-red-200",
-  };
-  return map[s];
-}
-
 function CheckTab({ editor }: { editor: any }) {
   const [reqFile, setReqFile] = useState<string | null>(null);
   const [bidFile, setBidFile] = useState<string | null>(null);
@@ -364,30 +439,20 @@ function CheckTab({ editor }: { editor: any }) {
     }
   };
 
-  const exportMd = () => {
+  const exportMd = async () => {
     if (!report) return;
-    let md = "# 偏离检查报告\n\n";
-    md += `| 总项 | 完全响应 | 正偏离 | 轻微偏离 | 重大偏离 |\n`;
-    md += `|------|----------|--------|----------|----------|\n`;
-    md += `| ${report.total} | ${report.none_count} | ${report.positive_count} | ${report.minor_count} | ${report.major_count} |\n\n`;
-    md += "| 序号 | 章节 | 要求 | 状态 | 风险 | 说明 | 建议 |\n";
-    md += "|------|------|------|------|------|------|------|\n";
-    report.items.forEach((it) => {
-      md += `| ${it.id} | ${it.section} | ${it.requirement_text} | ${statusLabel(it.status)} | ${it.risk_level} | ${it.explanation} | ${it.suggestion} |\n`;
-    });
-    if (fatalRisks.length > 0) {
-      md += "\n## 废标风险项\n\n";
-      fatalRisks.forEach((r) => {
-        md += `- **${r.category}**：${r.description}（${r.risk_level}）→ ${r.suggestion}\n`;
-      });
+    try {
+      const md: string = await invoke("export_deviation_report_markdown", { report });
+      const blob = new Blob([md], { type: "text/markdown" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "偏离检查报告.md";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      setError(`导出失败: ${String(e)}`);
     }
-    const blob = new Blob([md], { type: "text/markdown" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "偏离检查报告.md";
-    a.click();
-    URL.revokeObjectURL(url);
   };
 
   const clear = () => {
@@ -421,268 +486,108 @@ function CheckTab({ editor }: { editor: any }) {
     if (!editor || punctIssues.length === 0) return;
     // 从后往前替换，避免位置偏移
     const sorted = [...punctIssues].sort((a, b) => b.position - a.position);
-    let text = editor.getText();
-    for (const issue of sorted) {
-      const before = text.slice(0, issue.position);
-      const after = text.slice(issue.position + issue.original.length);
-      text = before + issue.suggestion + after;
-    }
-    editor.chain().focus().setContent(`<p>${text.replace(/\n/g, "</p><p>")}</p>`).run();
+    editor
+      .chain()
+      .focus()
+      .command(({ tr, state }: any) => {
+        for (const issue of sorted) {
+          const from = issue.position + 1; // ProseMirror 位置从 1 开始
+          const to = from + issue.original.length;
+          // 安全检查：位置有效且内容匹配才替换
+          if (from < 1 || to > state.doc.content.size) continue;
+          const currentText = state.doc.textBetween(from, to);
+          if (currentText !== issue.original) continue;
+          // 使用 insertText 保留 marks 和 undo 历史
+          tr.insertText(issue.suggestion, from, to);
+        }
+        return true;
+      })
+      .run();
     setPunctIssues([]);
   };
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      {/* 头部上传区 */}
-      <div className="shrink-0 p-4 border-b border-gray-200 bg-white space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold flex items-center gap-2">
-            <SearchCheck size={18} />
-            偏离检查
-          </h2>
-          {(reqFile || bidFile || report) && (
-            <button
-              onClick={clear}
-              className="text-xs flex items-center gap-1 text-gray-500 hover:text-red-600"
-            >
-              <Trash2 size={14} />
-              重置
-            </button>
-          )}
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          {/* 招标文件 */}
-          <div
-            onClick={() => pickFile("req")}
-            className={`border-2 border-dashed rounded-lg p-3 text-center cursor-pointer transition-colors ${
-              reqFile
-                ? "border-green-400 bg-green-50"
-                : "border-gray-300 hover:border-blue-400"
-            }`}
-          >
-            <Upload size={20} className={`mx-auto mb-1 ${reqFile ? "text-green-600" : "text-gray-400"}`} />
-            <p className="text-xs font-medium text-gray-700">
-              {reqFile ? reqFile.split(/[/\\]/).pop() : "点击选择招标文件"}
-            </p>
-          </div>
-          {/* 投标文档 */}
-          <div
-            onClick={() => pickFile("bid")}
-            className={`border-2 border-dashed rounded-lg p-3 text-center cursor-pointer transition-colors ${
-              bidFile
-                ? "border-green-400 bg-green-50"
-                : "border-gray-300 hover:border-blue-400"
-            }`}
-          >
-            <Upload size={20} className={`mx-auto mb-1 ${bidFile ? "text-green-600" : "text-gray-400"}`} />
-            <p className="text-xs font-medium text-gray-700">
-              {bidFile ? bidFile.split(/[/\\]/).pop() : "点击选择投标文档"}
-            </p>
-          </div>
-        </div>
-
-        {error && (
-          <div className="text-xs text-red-600 bg-red-50 rounded px-3 py-2">
-            {error}
-          </div>
-        )}
-
-        <button
-          onClick={runCheck}
-          disabled={loading || !reqFile || !bidFile}
-          className="w-full flex items-center justify-center gap-2 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
-        >
-          <Play size={16} />
-          {loading ? "检查中..." : "开始检查"}
-        </button>
-      </div>
-
-      {/* 结果展示区 */}
-      <div className="flex-1 overflow-auto p-4 space-y-4">
-        {!report && !loading && (
-          <div className="text-center text-gray-400 py-12 text-sm">
-            上传招标文件和投标文档后，点击"开始检查"查看偏离分析结果
-          </div>
-        )}
-
-        {report && (
-          <>
-            {/* 统计卡片 */}
-            <div className="grid grid-cols-5 gap-2">
-              {[
-                { label: "完全响应", count: report.none_count, color: "bg-green-100 text-green-700" },
-                { label: "正偏离", count: report.positive_count, color: "bg-blue-100 text-blue-700" },
-                { label: "轻微偏离", count: report.minor_count, color: "bg-amber-100 text-amber-700" },
-                { label: "重大偏离", count: report.major_count, color: "bg-red-100 text-red-700" },
-                { label: "致命风险", count: fatalRisks.length, color: "bg-gray-100 text-gray-700" },
-              ].map((c) => (
-                <div key={c.label} className={`rounded-lg p-2 text-center ${c.color}`}>
-                  <div className="text-lg font-bold">{c.count}</div>
-                  <div className="text-xs">{c.label}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* 偏离项列表 */}
-            <div className="bg-white rounded-lg border border-gray-200">
-              <div className="px-4 py-3 border-b border-gray-100 font-medium text-sm flex items-center justify-between">
-                <span>偏离项详情 ({report.items.length})</span>
-                <button
-                  onClick={exportMd}
-                  className="text-xs flex items-center gap-1 text-blue-600 hover:text-blue-700"
-                >
-                  <Download size={14} />
-                  导出报告
-                </button>
-              </div>
-              <div className="divide-y divide-gray-100">
-                {report.items.map((it) => (
-                  <div
-                    key={it.id}
-                    className={`px-4 py-3 text-sm border-l-4 ${statusColor(it.status).replace(/bg-[^ ]+/, "")}`}
-                    style={{
-                      borderLeftColor:
-                        it.status === "None"
-                          ? "#22c55e"
-                          : it.status === "Positive"
-                          ? "#3b82f6"
-                          : it.status === "Minor"
-                          ? "#f59e0b"
-                          : "#ef4444",
-                    }}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex-1">
-                        <div className="font-medium text-gray-800">
-                          #{it.id} {it.requirement_text}
-                        </div>
-                        {it.response_text && (
-                          <div className="text-xs text-gray-500 mt-1">
-                            应答：{it.response_text}
-                          </div>
-                        )}
-                        <div className="text-xs text-gray-500 mt-1">
-                          {it.explanation}
-                        </div>
-                        <div className="text-xs text-blue-600 mt-1">
-                          建议：{it.suggestion}
-                        </div>
-                      </div>
-                      <span
-                        className={`shrink-0 px-2 py-0.5 rounded text-xs font-medium border ${statusColor(it.status)}`}
-                      >
-                        {statusLabel(it.status)}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* 废标风险 */}
-            {fatalRisks.length > 0 && (
-              <div className="bg-white rounded-lg border border-red-200">
-                <div className="px-4 py-3 border-b border-red-100 font-medium text-sm text-red-700 flex items-center gap-2">
-                  <AlertTriangle size={16} />
-                  废标风险项 ({fatalRisks.length})
-                </div>
-                <div className="divide-y divide-red-50">
-                  {fatalRisks.map((r, i) => (
-                    <div key={i} className="px-4 py-3 text-sm">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex-1">
-                          <div className="font-medium text-red-700">
-                            {r.category}
-                          </div>
-                          <div className="text-gray-600 mt-0.5">
-                            {r.description}
-                          </div>
-                          <div className="text-xs text-blue-600 mt-1">
-                            建议：{r.suggestion}
-                          </div>
-                        </div>
-                        <span className="shrink-0 px-2 py-0.5 rounded text-xs font-medium bg-red-50 text-red-700 border border-red-200">
-                          {r.risk_level}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </>
-        )}
-
-        {/* 格式检查 */}
-        <div className="bg-white rounded-lg border border-gray-200">
-          <div className="px-4 py-3 border-b border-gray-100 font-medium text-sm flex items-center justify-between">
-            <span className="flex items-center gap-2">
-              <SearchCheck size={16} className="text-gray-500" />
-              格式检查（标点符号）
-            </span>
-            <div className="flex gap-2">
-              {punctIssues.length > 0 && (
-                <button
-                  onClick={applyPunctuationFixes}
-                  className="text-xs px-3 py-1.5 rounded bg-emerald-50 text-emerald-600 hover:bg-emerald-100 flex items-center gap-1"
-                >
-                  一键修复 ({punctIssues.length})
-                </button>
-              )}
-              <button
-                onClick={runPunctuationCheck}
-                disabled={punctLoading || !editor}
-                className="text-xs px-3 py-1.5 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 flex items-center gap-1 disabled:opacity-50"
-              >
-                <SearchCheck size={14} />
-                {punctLoading ? "检查中..." : "检查标点符号"}
-              </button>
-            </div>
-          </div>
-          {punctIssues.length === 0 && !punctLoading && (
-            <div className="px-4 py-6 text-center text-gray-400 text-xs">
-              点击"检查标点符号"扫描编辑器内容
-            </div>
-          )}
-          {punctLoading && (
-            <div className="px-4 py-6 text-center text-gray-400 text-xs">
-              检查中...
-            </div>
-          )}
-          {punctIssues.length > 0 && (
-            <div className="divide-y divide-gray-100 max-h-48 overflow-auto">
-              {punctIssues.map((issue) => (
-                <div key={issue.id} className="px-4 py-2.5 text-sm flex items-start gap-3">
-                  <span
-                    className={`shrink-0 px-1.5 py-0.5 rounded text-xs font-medium ${
-                      issue.severity === "error"
-                        ? "bg-red-50 text-red-700"
-                        : "bg-amber-50 text-amber-700"
-                    }`}
-                  >
-                    {issue.severity === "error" ? "错误" : "警告"}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-gray-700">{issue.message}</div>
-                    <div className="text-xs text-gray-500 mt-0.5">
-                      <span className="line-through">{issue.original}</span>
-                      <span className="mx-1">→</span>
-                      <span className="text-emerald-600 font-medium">{issue.suggestion}</span>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
+      <DeviationPanel
+        reqFile={reqFile}
+        bidFile={bidFile}
+        report={report}
+        fatalRisks={fatalRisks}
+        loading={loading}
+        error={error}
+        onPickFile={pickFile}
+        onRunCheck={runCheck}
+        onExportMd={exportMd}
+        onClear={clear}
+      />
+      <PunctuationPanel
+        editor={editor}
+        issues={punctIssues}
+        loading={punctLoading}
+        onRunCheck={runPunctuationCheck}
+        onApplyFixes={applyPunctuationFixes}
+      />
     </div>
   );
 }
 
 // ========== 设置标签页 ==========
 function SettingsTab() {
+  const [aiConfig, setAiConfig] = useState<{
+    provider: string;
+    base_url: string;
+    api_key: string;
+    model: string;
+  } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    invoke("get_ai_config")
+      .then((cfg: any) => {
+        setAiConfig({
+          provider: cfg.provider,
+          base_url: cfg.base_url,
+          api_key: cfg.api_key || "",
+          model: cfg.model,
+        });
+      })
+      .catch((e) => setMsg(`加载配置失败: ${String(e)}`))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const handleSave = async () => {
+    if (!aiConfig) return;
+    setSaving(true);
+    setMsg(null);
+    try {
+      await invoke("update_ai_config", {
+        ai: {
+          provider: aiConfig.provider,
+          base_url: aiConfig.base_url,
+          api_key: aiConfig.api_key || null,
+          model: aiConfig.model,
+        },
+      });
+      setMsg("配置已保存");
+      setTimeout(() => setMsg(null), 3000);
+    } catch (e: any) {
+      setMsg(`保存失败: ${String(e)}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="h-full p-6 flex items-center justify-center text-gray-400 text-sm">
+        加载配置中...
+      </div>
+    );
+  }
+
   return (
     <div className="h-full p-6">
       <h2 className="text-base font-semibold mb-4 flex items-center gap-2">
@@ -694,36 +599,87 @@ function SettingsTab() {
           <h3 className="font-medium mb-3">AI 配置</h3>
           <div className="space-y-3">
             <div>
-              <label className="text-sm text-gray-600 block mb-1">AI 模式</label>
-              <select className="w-full px-3 py-2 rounded border border-gray-200 text-sm">
-                <option>本地 Ollama（优先）</option>
-                <option>云端 API</option>
-                <option>自动切换</option>
+              <label htmlFor="ai-mode" className="text-sm text-gray-600 block mb-1">AI 提供商</label>
+              <select
+                id="ai-mode"
+                value={aiConfig?.provider || "Ollama"}
+                onChange={(e) =>
+                  setAiConfig((prev) =>
+                    prev ? { ...prev, provider: e.target.value } : null
+                  )
+                }
+                className="w-full px-3 py-2 rounded border border-gray-200 text-sm"
+              >
+                <option value="Ollama">本地 Ollama</option>
+                <option value="Claude">Claude API</option>
+                <option value="DeepSeek">DeepSeek API</option>
               </select>
             </div>
             <div>
-              <label className="text-sm text-gray-600 block mb-1">Ollama 地址</label>
+              <label htmlFor="ai-base-url" className="text-sm text-gray-600 block mb-1">API 地址</label>
               <input
+                id="ai-base-url"
                 type="text"
-                defaultValue="http://localhost:11434"
+                value={aiConfig?.base_url || ""}
+                onChange={(e) =>
+                  setAiConfig((prev) =>
+                    prev ? { ...prev, base_url: e.target.value } : null
+                  )
+                }
+                placeholder="http://localhost:11434"
                 className="w-full px-3 py-2 rounded border border-gray-200 text-sm"
               />
             </div>
             <div>
-              <label className="text-sm text-gray-600 block mb-1">云端 API Key</label>
+              <label htmlFor="ai-api-key" className="text-sm text-gray-600 block mb-1">API Key</label>
               <input
+                id="ai-api-key"
                 type="password"
+                value={aiConfig?.api_key || ""}
+                onChange={(e) =>
+                  setAiConfig((prev) =>
+                    prev ? { ...prev, api_key: e.target.value } : null
+                  )
+                }
                 placeholder="sk-..."
                 className="w-full px-3 py-2 rounded border border-gray-200 text-sm"
               />
             </div>
+            <div>
+              <label htmlFor="ai-model" className="text-sm text-gray-600 block mb-1">模型</label>
+              <input
+                id="ai-model"
+                type="text"
+                value={aiConfig?.model || ""}
+                onChange={(e) =>
+                  setAiConfig((prev) =>
+                    prev ? { ...prev, model: e.target.value } : null
+                  )
+                }
+                placeholder="qwen2.5:14b"
+                className="w-full px-3 py-2 rounded border border-gray-200 text-sm"
+              />
+            </div>
+            {msg && (
+              <p className={`text-xs ${msg.includes("失败") ? "text-red-600" : "text-emerald-600"}`}>
+                {msg}
+              </p>
+            )}
+            <button
+              onClick={handleSave}
+              disabled={saving || !aiConfig}
+              className="w-full py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:bg-gray-300 transition-colors"
+            >
+              {saving ? "保存中..." : "保存配置"}
+            </button>
           </div>
         </div>
         <div className="bg-white rounded-lg border border-gray-200 p-4">
           <h3 className="font-medium mb-3">知识库配置</h3>
           <div>
-            <label className="text-sm text-gray-600 block mb-1">NAS 扫描路径</label>
+            <label htmlFor="nas-path" className="text-sm text-gray-600 block mb-1">NAS 扫描路径</label>
             <input
+              id="nas-path"
               type="text"
               placeholder="/Volumes/NAS/投标文件"
               className="w-full px-3 py-2 rounded border border-gray-200 text-sm"

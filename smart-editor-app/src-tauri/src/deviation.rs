@@ -9,6 +9,9 @@ const MANDATORY_KEYWORDS: &[&str] = &[
     "★", "必须", "须", "应", "不得", "禁止", "强制", "关键", "务必", "一定",
 ];
 
+/// 强制词 stop-list：含 "须"/"应" 单字的常见非强制词
+const MANDATORY_STOP_LIST: &[&str] = &["应用", "须知", "适应", "反应"];
+
 const STOP_WORDS: &[&str] = &[
     "的", "了", "和", "是", "在", "有", "被", "将", "为", "与", "及", "或", "等", "所述", "该",
     "此", "上述", "以下", "以上",
@@ -19,8 +22,9 @@ static RE_SECTION_NUM: Lazy<Regex> =
 static RE_NON_KEYWORD: Lazy<Regex> = Lazy::new(|| Regex::new(r"[^一-龥a-zA-Z0-9]+").unwrap());
 static RE_VALIDITY: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"有效期\s*(?:不少于?|至少)?\s*(\d+)\s*天").unwrap());
-static RE_NUMERIC_VALUE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(\d+(?:\.\d+)?)\s*([a-zA-Z一-龥]+)").unwrap());
+static RE_NUMERIC_VALUE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(\d+(?:\.\d+)?)\s*(个|项|人|天|年|月|周|小时|分钟|秒|万元|元|亿元|套|台|次|页|份|家|条|款|章|节|点|类|种|组|批|单|笔|件|辆|艘|架|座|处|间|亩|公顷|平方米|立方米|吨|千克|公斤|克|升|毫升|米|千米|公里|厘米|毫米|Mbps|Gbps|GB|TB|MB|KB|PB|B|%)").unwrap()
+});
 
 /// 从招标文件文本提取强制要求项
 pub fn extract_requirements(req_text: &str) -> Vec<RequirementItem> {
@@ -41,7 +45,9 @@ pub fn extract_requirements(req_text: &str) -> Vec<RequirementItem> {
         }
 
         // 判断是否为强制要求
-        let is_mandatory = MANDATORY_KEYWORDS.iter().any(|kw| trimmed.contains(kw));
+        let has_mandatory_kw = MANDATORY_KEYWORDS.iter().any(|kw| trimmed.contains(kw));
+        let has_stop_word = MANDATORY_STOP_LIST.iter().any(|sw| trimmed.contains(sw));
+        let is_mandatory = has_mandatory_kw && !has_stop_word;
         if !is_mandatory {
             continue;
         }
@@ -51,7 +57,7 @@ pub fn extract_requirements(req_text: &str) -> Vec<RequirementItem> {
             id,
             section: current_section.clone(),
             text: trimmed.to_string(),
-            category: infer_category(trimmed),
+            category: crate::category::infer_category(trimmed),
             mandatory: true,
             keywords,
         });
@@ -62,13 +68,7 @@ pub fn extract_requirements(req_text: &str) -> Vec<RequirementItem> {
 }
 
 /// 在投标文本中定位最匹配的应答段落
-pub fn find_response(req: &RequirementItem, bid_text: &str) -> Option<ResponseMatch> {
-    let paragraphs: Vec<&str> = bid_text
-        .lines()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
-
+pub fn find_response(req: &RequirementItem, paragraphs: &[&str]) -> Option<ResponseMatch> {
     let mut best: Option<ResponseMatch> = None;
 
     for (idx, para) in paragraphs.iter().enumerate() {
@@ -195,6 +195,11 @@ pub fn judge_deviation(req: &RequirementItem, resp: &ResponseMatch) -> Deviation
 /// 主入口：对两份文本执行偏离检查
 pub fn check_deviation(bid_text: &str, req_text: &str) -> DeviationReport {
     let requirements = extract_requirements(req_text);
+    let paragraphs: Vec<&str> = bid_text
+        .lines()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
     let mut items = Vec::new();
     let mut none_count = 0usize;
     let mut positive_count = 0usize;
@@ -203,7 +208,7 @@ pub fn check_deviation(bid_text: &str, req_text: &str) -> DeviationReport {
     let mut fatal_risk_count = 0usize;
 
     for req in &requirements {
-        let result = if let Some(resp) = find_response(req, bid_text) {
+        let result = if let Some(resp) = find_response(req, &paragraphs) {
             judge_deviation(req, &resp)
         } else {
             // 未找到应答：视为重大偏离
@@ -271,7 +276,7 @@ impl DeviationReport {
             md.push_str(&format!(
                 "| {} | {} | {} | {} | {} | {} | {} |\n",
                 item.id,
-                item.section,
+                item.section.replace('|', "\\|"),
                 item.requirement_text.replace('|', "\\|"),
                 status_str,
                 item.risk_level,
@@ -356,21 +361,6 @@ fn extract_keywords(text: &str) -> Vec<String> {
     }
 
     result
-}
-
-fn infer_category(text: &str) -> String {
-    let lower = text.to_lowercase();
-    if lower.contains("资质")
-        || lower.contains("报价")
-        || lower.contains("付款")
-        || lower.contains("保证金")
-        || lower.contains("工期")
-        || lower.contains("合同")
-    {
-        "商务".to_string()
-    } else {
-        "技术".to_string()
-    }
 }
 
 fn calc_relevance(req_keywords: &[String], paragraph: &str) -> f64 {
@@ -573,7 +563,12 @@ mod tests {
             keywords: extract_keywords(req_text),
         };
         let bid = "我公司成立于2010年。\n我司具有法人、资格。\n技术团队100人。";
-        let resp = find_response(&req, bid).unwrap();
+        let bid_paras: Vec<&str> = bid
+            .lines()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let resp = find_response(&req, &bid_paras).unwrap();
         assert_eq!(resp.paragraph_index, 1);
         assert!(resp.text.contains("法人"));
         assert!(resp.relevance_score > 0.0);
@@ -590,7 +585,12 @@ mod tests {
             keywords: vec!["飞船".to_string(), "驾照".to_string()],
         };
         let bid = "我公司成立于2010年。\n我司具有独立法人资格。";
-        assert!(find_response(&req, bid).is_none());
+        let bid_paras: Vec<&str> = bid
+            .lines()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert!(find_response(&req, &bid_paras).is_none());
     }
 
     #[test]

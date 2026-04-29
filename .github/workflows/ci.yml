@@ -9,7 +9,11 @@ on:
 jobs:
   rust-checks:
     name: Rust Checks
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.platform }}
     defaults:
       run:
         working-directory: ./smart-editor-app/src-tauri
@@ -26,6 +30,12 @@ jobs:
         with:
           workspaces: "smart-editor-app/src-tauri"
 
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libappindicator3-dev librsvg2-dev patchelf
+
       - name: Check formatting
         run: cargo fmt -- --check
 
@@ -37,6 +47,9 @@ jobs:
 
       - name: Run clippy
         run: cargo clippy -- -D warnings
+
+      - name: Tauri build
+        run: cargo tauri build
 
   frontend-checks:
     name: Frontend Checks
