@@ -1,10 +1,14 @@
 use std::path::Path;
 
 use crate::error::{AppError, Result};
+use crate::models::{Paragraph, ParsedDocumentStructured};
 
 /// 根据文件扩展名选择对应解析器，提取纯文本
 pub fn parse_document(file_path: &str) -> Result<String> {
     let path = Path::new(file_path);
+    if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err(AppError::Validation("非法文件路径".to_string()));
+    }
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -13,11 +17,37 @@ pub fn parse_document(file_path: &str) -> Result<String> {
 
     match ext.as_str() {
         "docx" => parse_docx(file_path),
+        "doc" => Err(AppError::Parse(
+            "doc 格式不支持，请转换为 .docx 后重试".to_string(),
+        )),
         "pdf" => parse_pdf(file_path),
         "xlsx" | "xls" => parse_xlsx(file_path),
         "txt" | "md" => parse_txt(file_path),
         _ => Err(AppError::Parse(format!("不支持的文件格式: {}", ext))),
     }
+}
+
+/// 结构化解析：返回纯文本 + 段落列表（T6）
+pub fn parse_document_structured(file_path: &str) -> Result<ParsedDocumentStructured> {
+    let text = parse_document(file_path)?;
+    let mut paragraphs = Vec::new();
+    let mut char_offset = 0usize;
+    let mut idx = 0usize;
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            paragraphs.push(Paragraph {
+                index: idx,
+                text: trimmed.to_string(),
+                char_offset,
+            });
+            idx += 1;
+        }
+        char_offset += line.chars().count() + 1; // +1 for '\n'
+    }
+
+    Ok(ParsedDocumentStructured { text, paragraphs })
 }
 
 fn parse_docx(file_path: &str) -> Result<String> {
@@ -146,5 +176,21 @@ mod tests {
         assert!(result.is_err());
         let err_msg = format!("{}", result.unwrap_err());
         assert!(!err_msg.contains("不支持的文件格式"));
+    }
+
+    /// T9-B2：.doc 文件应返回明确 actionable 错误（提示用户转 .docx）
+    /// 当前实现把 .doc 归到通用 "不支持的文件格式" 分支——不够明确，T4 应改进。
+    /// 期望错误消息中包含 "doc 格式不支持" 或 "请转 .docx" 等可操作提示。
+    #[test]
+    #[ignore = "depends on T4: actionable error message for .doc files"]
+    fn test_parse_document_doc_actionable_error() {
+        let result = parse_document("legacy.doc");
+        assert!(result.is_err(), ".doc 应返回 Err");
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("doc 格式不支持") || err_msg.contains("请转 .docx"),
+            "T9-B2: .doc 错误消息应给出可操作建议，当前: {:?}",
+            err_msg
+        );
     }
 }

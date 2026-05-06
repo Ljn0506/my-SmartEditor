@@ -1,6 +1,10 @@
-import { describe, it, expect } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import App from "./App";
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(() => Promise.resolve([])),
+}));
 
 describe("App", () => {
   it("renders the app title", () => {
@@ -17,27 +21,33 @@ describe("App", () => {
     expect(screen.getByText("设置")).toBeInTheDocument();
   });
 
-  it("switches to library tab when clicked", () => {
+  it("switches to library tab when clicked", async () => {
     render(<App />);
     const libraryTab = screen.getByText("模板库");
     fireEvent.click(libraryTab);
     expect(screen.getByPlaceholderText("搜索标题、内容、标签...")).toBeInTheDocument();
+    // 等待 LibraryTab 异步 effect 完成，消除 act 警告
+    await waitFor(() => {
+      expect(screen.getByText("暂无模板，请调整筛选条件或搜索关键词")).toBeInTheDocument();
+    });
   });
 
-  it("switches to settings tab when clicked", () => {
+  it("switches to settings tab when clicked", async () => {
     render(<App />);
     const settingsTab = screen.getByText("设置");
     fireEvent.click(settingsTab);
-    expect(screen.getByText("AI 配置")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("http://localhost:11434")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("AI 配置")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("http://localhost:11434")).toBeInTheDocument();
+    });
   });
 
   it("switches to check tab and shows deviation panel", () => {
     render(<App />);
     const checkTab = screen.getByText("校对");
     fireEvent.click(checkTab);
-    expect(screen.getByText("偏离检查")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /开始检查/ })).toBeInTheDocument();
+    expect(screen.getByText("校对检查")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /检查投标文件/ })).toBeInTheDocument();
   });
 
   it("shows upload drop zone by default", () => {

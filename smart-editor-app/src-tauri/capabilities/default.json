@@ -1,17 +1,11 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "identifier": "default",
-  "description": "默认权限能力",
+  "description": "最小权限能力配置 — 仅保留应用运行必需的确切权限，移除 fs:default 等宽泛权限",
   "local": true,
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "dialog:default",
-    "dialog:allow-open",
-    "fs:default",
-    "fs:allow-read-file",
-    "fs:allow-read-dir",
-    "fs:allow-copy-file",
-    "fs:allow-exists"
+    "dialog:allow-open"
   ]
 }

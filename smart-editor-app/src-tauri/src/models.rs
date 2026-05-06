@@ -288,6 +288,21 @@ pub struct ParsedDocument {
     pub text: String,
 }
 
+/// 段落信息（T6：前后端统一 paragraph_index 口径）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Paragraph {
+    pub index: usize,
+    pub text: String,
+    pub char_offset: usize,
+}
+
+/// 结构化解析结果（T6）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParsedDocumentStructured {
+    pub text: String,
+    pub paragraphs: Vec<Paragraph>,
+}
+
 /// 偏离检查项（预留：投标偏离检查功能使用）
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -340,6 +355,7 @@ pub struct DeviationCheckResult {
     pub risk_level: String,
     pub explanation: String,
     pub suggestion: String,
+    pub paragraph_index: Option<usize>,
 }
 
 /// 偏离检查汇总报告
@@ -361,6 +377,27 @@ pub struct FatalRisk {
     pub description: String,
     pub risk_level: String,
     pub suggestion: String,
+}
+
+/// 投标文件自查问题项
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SelfReviewIssue {
+    pub id: i64,
+    pub category: String,
+    pub sub_category: String,
+    pub message: String,
+    pub severity: Severity,
+    pub position: Option<usize>,
+    pub paragraph_index: Option<usize>,
+    pub original: Option<String>,
+    pub suggestion: Option<String>,
+    pub auto_fixable: bool,
+}
+
+/// 投标文件自查报告
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SelfReviewReport {
+    pub issues: Vec<SelfReviewIssue>,
 }
 
 /// 校对检查结果（预留：文档校对功能使用）

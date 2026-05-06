@@ -2,7 +2,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::error::{AppError, Result};
-use crate::models::{AiConfig, DocumentType, ParsedRequirements};
+use crate::models::{AiConfig, DocumentType, ParsedRequirements, SelfReviewIssue, Severity};
 
 #[derive(Clone)]
 pub struct AiClient {
@@ -162,6 +162,153 @@ impl AiClient {
             .map(|s| s.to_string())
             .ok_or_else(|| AppError::Ai("AI 响应中未找到内容".to_string()))
     }
+
+    /// T5: 检测文档中的自相矛盾（AI）
+    pub async fn check_contradictions(&self, text: &str) -> Result<Vec<SelfReviewIssue>> {
+        let prompt = build_contradiction_prompt(text);
+        let response = self.chat(&prompt).await?;
+        let json_str = extract_json_array(&response)?;
+        let items: Vec<AiReviewItem> = serde_json::from_str(json_str)
+            .map_err(|e| AppError::Ai(format!("矛盾检测 JSON 解析失败: {}", e)))?;
+        Ok(items.into_iter().map(|it| it.to_issue("contradiction")).collect())
+    }
+
+    /// T5: 检测上下文逻辑断裂（AI）
+    pub async fn check_context_logic(&self, text: &str) -> Result<Vec<SelfReviewIssue>> {
+        let prompt = build_context_logic_prompt(text);
+        let response = self.chat(&prompt).await?;
+        let json_str = extract_json_array(&response)?;
+        let items: Vec<AiReviewItem> = serde_json::from_str(json_str)
+            .map_err(|e| AppError::Ai(format!("逻辑检测 JSON 解析失败: {}", e)))?;
+        Ok(items.into_iter().map(|it| it.to_issue("logic")).collect())
+    }
+}
+
+/// AI 返回的审查项中间格式
+#[derive(Debug, serde::Deserialize)]
+struct AiReviewItem {
+    message: String,
+    original: String,
+    suggestion: String,
+    severity: String,
+}
+
+impl AiReviewItem {
+    #[allow(clippy::wrong_self_convention)]
+    fn to_issue(self, sub_category: &str) -> SelfReviewIssue {
+        let severity = match self.severity.as_str() {
+            "Error" => Severity::Error,
+            "Warning" => Severity::Warning,
+            "Info" => Severity::Info,
+            other => {
+                log::warn!("AI 返回未知 severity: {}, 已降级为 Info", other);
+                Severity::Info
+            }
+        };
+        SelfReviewIssue {
+            id: 0, // 由调用方重新编号
+            category: "consistency".to_string(),
+            sub_category: sub_category.to_string(),
+            message: self.message,
+            severity,
+            position: None,
+            paragraph_index: None,
+            original: Some(self.original),
+            suggestion: Some(self.suggestion),
+            auto_fixable: false,
+        }
+    }
+}
+
+fn build_contradiction_prompt(text: &str) -> String {
+    format!(
+        r#"你是一位文档审查专家，擅长发现技术文档和投标文件中的自相矛盾。
+
+请分析以下文档，找出所有自相矛盾之处。例如：
+- 前面说"7x24小时支持"，后面说"工作日9-18点"
+- 前面说"交付周期30天"，后面说"交付周期60天"
+- 技术指标前后不一致
+
+对每个矛盾，输出以下字段：
+- message: 矛盾描述
+- original: 涉及的文本片段（50字以内）
+- suggestion: 修改建议
+- severity: "Error"（严重）或 "Warning"（一般）
+
+输出严格的 JSON 数组格式，不要包含任何其他文字：
+[
+  {{"message": "...", "original": "...", "suggestion": "...", "severity": "Error"}}
+]
+
+文档内容（{}字）：
+{}"#,
+        text.chars().count(),
+        text.chars().take(12000).collect::<String>()
+    )
+}
+
+fn build_context_logic_prompt(text: &str) -> String {
+    format!(
+        r#"你是一位文档审查专家，擅长发现技术文档和投标文件中的上下文逻辑断裂。
+
+请分析以下文档，找出所有上下文逻辑问题。例如：
+- 前文提到"详见第三章"，但后文没有对应内容
+- 论述突然中断，没有结论
+- 前后段落缺乏过渡或因果关系不成立
+- 引用不存在的图表或章节
+
+对每个问题，输出以下字段：
+- message: 问题描述
+- original: 涉及的文本片段（50字以内）
+- suggestion: 修改建议
+- severity: "Error"（严重）或 "Warning"（一般）
+
+输出严格的 JSON 数组格式，不要包含任何其他文字：
+[
+  {{"message": "...", "original": "...", "suggestion": "...", "severity": "Warning"}}
+]
+
+文档内容（{}字）：
+{}"#,
+        text.chars().count(),
+        text.chars().take(12000).collect::<String>()
+    )
+}
+
+fn extract_json_array(text: &str) -> Result<&str> {
+    if let Some(start) = text.find('[') {
+        let mut depth = 0;
+        let mut in_string = false;
+        let mut escape = false;
+        for (i, ch) in text[start..].char_indices() {
+            if escape {
+                escape = false;
+                continue;
+            }
+            if ch == '\\' && in_string {
+                escape = true;
+                continue;
+            }
+            if ch == '"' {
+                in_string = !in_string;
+                continue;
+            }
+            if in_string {
+                continue;
+            }
+            match ch {
+                '[' => depth += 1,
+                ']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Ok(&text[start..start + i + ch.len_utf8()]);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Err(AppError::Parse("AI 返回中未找到 JSON 数组".to_string()))
 }
 
 fn build_tech_prompt(text: &str) -> String {
@@ -273,8 +420,35 @@ fn build_business_draft_prompt(requirements: &str, references: &[String]) -> Str
 
 fn extract_json(text: &str) -> Result<&str> {
     if let Some(start) = text.find('{') {
-        if let Some(end) = text.rfind('}') {
-            return Ok(&text[start..=end]);
+        let mut depth = 0;
+        let mut in_string = false;
+        let mut escape = false;
+        for (i, ch) in text[start..].char_indices() {
+            if escape {
+                escape = false;
+                continue;
+            }
+            if ch == '\\' && in_string {
+                escape = true;
+                continue;
+            }
+            if ch == '"' {
+                in_string = !in_string;
+                continue;
+            }
+            if in_string {
+                continue;
+            }
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Ok(&text[start..start + i + ch.len_utf8()]);
+                    }
+                }
+                _ => {}
+            }
         }
     }
     Err(AppError::Parse("AI 返回中未找到 JSON 内容".to_string()))
@@ -316,6 +490,22 @@ fn validate_requirements(parsed: &crate::models::ParsedRequirements) -> Result<(
         if item.id <= 0 {
             return Err(AppError::Validation(format!(
                 "符合性审查项 ID 必须为正整数，收到: {}",
+                item.id
+            )));
+        }
+    }
+    for item in &parsed.scoring_criteria {
+        if item.id <= 0 {
+            return Err(AppError::Validation(format!(
+                "评分标准项 ID 必须为正整数，收到: {}",
+                item.id
+            )));
+        }
+    }
+    for item in &parsed.commitments {
+        if item.id <= 0 {
+            return Err(AppError::Validation(format!(
+                "承诺条款项 ID 必须为正整数，收到: {}",
                 item.id
             )));
         }

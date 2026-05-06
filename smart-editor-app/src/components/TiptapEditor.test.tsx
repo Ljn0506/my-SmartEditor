@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import TiptapEditor from "./TiptapEditor";
 
 describe("TiptapEditor", () => {
@@ -20,9 +20,9 @@ describe("TiptapEditor", () => {
   it("calls onEditorReady when editor is initialized", async () => {
     const onEditorReady = vi.fn();
     render(<TiptapEditor onEditorReady={onEditorReady} />);
-    // Editor initialization is async; wait briefly then verify callback was called
-    await new Promise((r) => setTimeout(r, 100));
-    expect(onEditorReady).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(onEditorReady).toHaveBeenCalled();
+    });
   });
 
   it("renders editor content area", () => {

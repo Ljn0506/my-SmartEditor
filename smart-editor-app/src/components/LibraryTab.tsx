@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Editor } from "@tiptap/core";
+import DOMPurify from "dompurify";
 import {
   Search,
   FileText,
@@ -339,13 +340,14 @@ export default function LibraryTab({ editor }: { editor: Editor | null }) {
             <div className="flex-1 overflow-auto p-5 text-sm leading-relaxed">
               <div
                 dangerouslySetInnerHTML={{
-                  __html:
+                  __html: DOMPurify.sanitize(
                     preview.content_html ||
-                    `<p>${preview.content
-                      .replace(/&/g, "&amp;")
-                      .replace(/</g, "&lt;")
-                      .replace(/>/g, "&gt;")
-                      .replace(/\n/g, "<br/>")}</p>`,
+                      `<p>${preview.content
+                        .replace(/&/g, "&amp;")
+                        .replace(/</g, "&lt;")
+                        .replace(/>/g, "&gt;")
+                        .replace(/\n/g, "<br/>")}</p>`
+                  ),
                 }}
               />
             </div>

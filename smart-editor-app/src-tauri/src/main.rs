@@ -14,6 +14,7 @@ mod nas_scanner;
 mod parser;
 mod punctuation;
 mod search;
+mod self_review;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -23,8 +24,8 @@ use crate::ai::AiClient;
 use crate::db::Database;
 use crate::desensitize::DesensitizeHit;
 use crate::models::{
-    AiConfig, DeviationReport, DocumentType, ParsedDocument, ParsedRequirements, SearchResult,
-    Template,
+    AiConfig, DeviationReport, DocumentType, ParsedDocument, ParsedDocumentStructured, ParsedRequirements, SearchResult,
+    SelfReviewReport, Template,
 };
 use crate::nas_scanner::{scan_directory, ImportResult};
 use crate::search::SearchEngine;
@@ -48,6 +49,11 @@ impl AppState {
 #[tauri::command]
 fn parse_document(file_path: String) -> Result<String, String> {
     parser::parse_document(&file_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn parse_document_structured(file_path: String) -> Result<ParsedDocumentStructured, String> {
+    parser::parse_document_structured(&file_path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -381,15 +387,35 @@ fn detect_document_type(file_name: String) -> DocumentType {
 // --- 偏离检查命令 ---
 
 #[tauri::command]
-fn check_deviation(bid_text: String, req_text: String) -> DeviationReport {
-    deviation::check_deviation(&bid_text, &req_text)
+async fn check_deviation(bid_text: String, req_text: String) -> Result<DeviationReport, String> {
+    tokio::task::spawn_blocking(move || {
+        deviation::check_deviation(&bid_text, &req_text)
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn check_deviation_files(bid_path: String, req_path: String) -> Result<DeviationReport, String> {
-    let bid_text = parser::parse_document(&bid_path).map_err(|e| e.to_string())?;
-    let req_text = parser::parse_document(&req_path).map_err(|e| e.to_string())?;
-    Ok(deviation::check_deviation(&bid_text, &req_text))
+async fn check_deviation_files(bid_path: String, req_path: String) -> Result<DeviationReport, String> {
+    tokio::task::spawn_blocking(move || {
+        let bid_text = parser::parse_document(&bid_path).map_err(|e| e.to_string())?;
+        let req_text = parser::parse_document(&req_path).map_err(|e| e.to_string())?;
+        Ok(deviation::check_deviation(&bid_text, &req_text))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn check_deviation_items(
+    req_items: Vec<crate::models::RequirementItem>,
+    bid_text: String,
+) -> Result<DeviationReport, String> {
+    tokio::task::spawn_blocking(move || {
+        deviation::check_deviation_items(&req_items, &bid_text)
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 // --- 脱敏命令 ---
@@ -419,8 +445,10 @@ fn write_clipboard_text(text: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn check_fatal_risks_text(text: String) -> Vec<crate::models::FatalRisk> {
-    deviation::check_fatal_risks(&text)
+async fn check_fatal_risks_text(text: String) -> Result<Vec<crate::models::FatalRisk>, String> {
+    tokio::task::spawn_blocking(move || deviation::check_fatal_risks(&text))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -439,8 +467,54 @@ fn export_deviation_report_json(report: crate::models::DeviationReport) -> Strin
 }
 
 #[tauri::command]
-fn check_punctuation(text: String) -> Vec<punctuation::PunctuationIssue> {
-    punctuation::check_punctuation(&text)
+async fn check_punctuation(text: String) -> Result<Vec<punctuation::PunctuationIssue>, String> {
+    tokio::task::spawn_blocking(move || punctuation::check_punctuation(&text))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn check_self_review(text: String) -> Result<SelfReviewReport, String> {
+    tokio::task::spawn_blocking(move || self_review::check_self_review(&text))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// T5: 完整的投标文件自查（本地 + AI）
+#[tauri::command]
+async fn check_self_review_async(
+    state: tauri::State<'_, AppState>,
+    text: String,
+) -> Result<SelfReviewReport, String> {
+    // 1. 本地检查（重复 / 敏感信息 / 占位符 / 标点）
+    let mut report = self_review::check_self_review(&text);
+
+    // 2. AI 检查（矛盾 / 逻辑）并行执行
+    let ai = state.ai_client().map_err(|e| e.to_string())?;
+    let (contradiction_result, logic_result) = tokio::join!(
+        ai.check_contradictions(&text),
+        ai.check_context_logic(&text),
+    );
+    match contradiction_result {
+        Ok(mut issues) => report.issues.append(&mut issues),
+        Err(e) => log::warn!("AI 矛盾检测失败: {}", e),
+    }
+    match logic_result {
+        Ok(mut issues) => report.issues.append(&mut issues),
+        Err(e) => log::warn!("AI 逻辑检测失败: {}", e),
+    }
+
+    // 3. 重新编号 + 按 severity 排序
+    for (i, issue) in report.issues.iter_mut().enumerate() {
+        issue.id = (i + 1) as i64;
+    }
+    report.issues.sort_by_key(|i| match i.severity {
+        crate::models::Severity::Error => 0,
+        crate::models::Severity::Warning => 1,
+        crate::models::Severity::Info => 2,
+    });
+
+    Ok(report)
 }
 
 // --- 应用入口 ---
@@ -489,6 +563,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             parse_document,
+            parse_document_structured,
             parse_requirement_file,
             parse_and_extract,
             create_template,
@@ -509,6 +584,7 @@ fn main() {
             detect_document_type,
             check_deviation,
             check_deviation_files,
+            check_deviation_items,
             desensitize_text,
             analyze_desensitize,
             write_clipboard_html,
@@ -518,6 +594,8 @@ fn main() {
             export_deviation_report_html,
             export_deviation_report_json,
             check_punctuation,
+            check_self_review,
+            check_self_review_async,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
