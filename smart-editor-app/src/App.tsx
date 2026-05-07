@@ -200,9 +200,9 @@ function UploadTab() {
     setError(null);
     setParsedText("");
     try {
-      const text: string = await invoke("parse_document", { filePath });
+      const result: { text: string; paragraphs: Array<{ index: number; text: string; char_offset: number }> } = await invoke("parse_document", { filePath });
       setFileName(name);
-      setParsedText(text);
+      setParsedText(result.text);
       // TODO: 接入 AI extract_requirements 自动提取需求项
       // 当前保留 mock 数据作为 fallback，实际接入后替换
       if (requirements.length === 0) {
@@ -404,23 +404,33 @@ function PushTab() {
   );
 }
 
-interface ParagraphInfo {
-  index: number;
-  text: string;
-  char_offset: number;
-}
-
 function CheckTabFullScreen() {
-  const { requirements } = useRequirements();
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [fileName, setFileName] = useState<string | null>(null);
-  const [paragraphs, setParagraphs] = useState<ParagraphInfo[]>([]);
-  const [report, setReport] = useState<DeviationReport | null>(null);
-  const [fatalRisks, setFatalRisks] = useState<FatalRisk[]>([]);
-  const [selfReviewReport, setSelfReviewReport] = useState<any | null>(null);
+  const {
+    requirements,
+    bidFilePath,
+    setBidFilePath,
+    bidFileName,
+    setBidFileName,
+    bidParagraphs,
+    setBidParagraphs,
+    checkReport,
+    setCheckReport,
+    checkFatalRisks,
+    setCheckFatalRisks,
+    checkSelfReviewReport,
+    setCheckSelfReviewReport,
+  } = useRequirements();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [highlightedIdx, setHighlightedIdx] = useState<number | null>(null);
+  const [showDocWarning, setShowDocWarning] = useState(false);
+  const [pendingDocPath, setPendingDocPath] = useState<string | null>(null);
+  const [showFixConfirm, setShowFixConfirm] = useState(false);
+  const [fixing, setFixing] = useState(false);
+  const [fixMode, setFixMode] = useState<'copy' | 'overwrite'>('copy');
+  const [showFixResult, setShowFixResult] = useState(false);
+  const [fixResult, setFixResult] = useState<any>(null);
+  const [modifiedIdxs, setModifiedIdxs] = useState<number[]>([]);
   const previewRef = useRef<HTMLDivElement>(null);
   const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -429,25 +439,49 @@ function CheckTabFullScreen() {
     try {
       const selected = await open({
         multiple: false,
-        filters: [{ name: "文档", extensions: ["docx", "pdf", "txt"] }],
+        filters: [{ name: "文档", extensions: ["docx", "doc"] }],
       });
       if (selected && typeof selected === "string") {
-        setSelectedFile(selected);
-        setFileName(selected.split("/").pop() || selected);
-        const result: any = await invoke("parse_document_structured", { filePath: selected });
-        setParagraphs(result.paragraphs || []);
-        // 清除上次结果
-        setReport(null);
-        setFatalRisks([]);
-        setSelfReviewReport(null);
+        const name = selected.split("/").pop() || selected;
+        const ext = name.split(".").pop()?.toLowerCase();
+        if (ext === "doc") {
+          setPendingDocPath(selected);
+          setShowDocWarning(true);
+          return;
+        }
+        await loadFile(selected, name);
       }
     } catch (e: any) {
       setError(`选择或解析文件失败: ${String(e)}`);
     }
   };
 
+  const loadFile = async (path: string, name: string) => {
+    try {
+      const result: any = await invoke("parse_document", { filePath: path });
+      setBidFilePath(path);
+      setBidFileName(name);
+      setBidParagraphs(result.paragraphs || []);
+      setCheckReport(null);
+      setCheckFatalRisks([]);
+      setCheckSelfReviewReport(null);
+      setError(null);
+    } catch (e: any) {
+      setError(`解析失败: ${String(e)}`);
+    }
+  };
+
+  const confirmDocContinue = async () => {
+    setShowDocWarning(false);
+    if (pendingDocPath) {
+      const name = pendingDocPath.split("/").pop() || pendingDocPath;
+      await loadFile(pendingDocPath, name);
+      setPendingDocPath(null);
+    }
+  };
+
   const runCheck = async () => {
-    if (!selectedFile || paragraphs.length === 0) {
+    if (!bidFilePath || bidParagraphs.length === 0) {
       setError("请先选择投标文档");
       return;
     }
@@ -455,13 +489,13 @@ function CheckTabFullScreen() {
       setError("请在「需求上传」Tab 先上传招标文件并提取需求");
       return;
     }
-    const bidText = paragraphs.map((p) => p.text).join("\n");
+    const bidText = bidParagraphs.map((p) => p.text).join("\n");
 
     setLoading(true);
     setError(null);
-    setReport(null);
-    setFatalRisks([]);
-    setSelfReviewReport(null);
+    setCheckReport(null);
+    setCheckFatalRisks([]);
+    setCheckSelfReviewReport(null);
     try {
       const reqItems = requirements.filter((r) => r.checked);
       const [result, risks, selfReview] = await Promise.all([
@@ -469,9 +503,9 @@ function CheckTabFullScreen() {
         invoke<FatalRisk[]>("check_fatal_risks_text", { text: bidText }),
         invoke<any>("check_self_review_async", { text: bidText }),
       ]);
-      setReport(result);
-      setFatalRisks(risks);
-      setSelfReviewReport(selfReview);
+      setCheckReport(result);
+      setCheckFatalRisks(risks);
+      setCheckSelfReviewReport(selfReview);
     } catch (e: any) {
       setError(String(e));
     } finally {
@@ -480,9 +514,9 @@ function CheckTabFullScreen() {
   };
 
   const exportMd = async () => {
-    if (!report) return;
+    if (!checkReport) return;
     try {
-      const md: string = await invoke("export_deviation_report_markdown", { report });
+      const md: string = await invoke("export_deviation_report_markdown", { report: checkReport });
       const blob = new Blob([md], { type: "text/markdown" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -495,10 +529,34 @@ function CheckTabFullScreen() {
     }
   };
 
+  const handleFix = async () => {
+    if (!bidFilePath || !checkSelfReviewReport) return;
+    setShowFixConfirm(false);
+    setFixing(true);
+    setError(null);
+    try {
+      const issues = checkSelfReviewReport.issues || [];
+      const result = await invoke("apply_self_review_fixes", {
+        filePath: bidFilePath,
+        issues,
+        mode: fixMode,
+      });
+      setFixResult(result);
+      const changes = (result as any)?.changes || [];
+      const idxs = changes.map((c: any) => c.paragraph_index);
+      setModifiedIdxs(idxs);
+      setShowFixResult(true);
+    } catch (e: any) {
+      setError(`修复失败: ${String(e)}`);
+    } finally {
+      setFixing(false);
+    }
+  };
+
   const clear = () => {
-    setReport(null);
-    setFatalRisks([]);
-    setSelfReviewReport(null);
+    setCheckReport(null);
+    setCheckFatalRisks([]);
+    setCheckSelfReviewReport(null);
     setError(null);
   };
 
@@ -506,12 +564,23 @@ function CheckTabFullScreen() {
     if (paragraphIndex === undefined || !previewRef.current) return;
     const el = previewRef.current.querySelector(`[data-paragraph-index="${paragraphIndex}"]`);
     if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (typeof (el as any).scrollIntoView === "function") {
+        (el as any).scrollIntoView({ behavior: "smooth", block: "center" });
+      }
       setHighlightedIdx(paragraphIndex);
       if (highlightTimeoutRef.current) {
         clearTimeout(highlightTimeoutRef.current);
       }
       highlightTimeoutRef.current = setTimeout(() => setHighlightedIdx(null), 2500);
+    }
+  };
+
+  const highlightModified = () => {
+    if (modifiedIdxs.length === 0 || !previewRef.current) return;
+    const firstIdx = modifiedIdxs[0];
+    const el = previewRef.current.querySelector(`[data-paragraph-index="${firstIdx}"]`);
+    if (el && typeof (el as any).scrollIntoView === "function") {
+      (el as any).scrollIntoView({ behavior: "smooth", block: "center" });
     }
   };
 
@@ -523,21 +592,29 @@ function CheckTabFullScreen() {
     };
   }, []);
 
+  const hasFixableIssues =
+    checkSelfReviewReport?.issues?.some((i: any) => i.auto_fixable) ?? false;
+  const isDocFile = bidFileName?.toLowerCase().endsWith(".doc");
+
   return (
     <div className="flex-1 flex overflow-hidden">
       {/* 左侧结果面板 */}
       <div className="w-[45%] min-w-[360px] max-w-[560px] flex flex-col border-r border-gray-200 bg-white">
         <CheckResultsPanel
           requirements={requirements}
-          report={report}
-          fatalRisks={fatalRisks}
-          selfReviewReport={selfReviewReport}
+          report={checkReport}
+          fatalRisks={checkFatalRisks}
+          selfReviewReport={checkSelfReviewReport}
           loading={loading}
           error={error}
           onRunCheck={runCheck}
           onExportMd={exportMd}
           onClear={clear}
           onJumpToParagraph={jumpToParagraph}
+          onFix={() => setShowFixConfirm(true)}
+          hasFixableIssues={hasFixableIssues}
+          isDocFile={isDocFile}
+          hasRequirements={requirements.length > 0}
         />
       </div>
 
@@ -548,40 +625,202 @@ function CheckTabFullScreen() {
           <div className="flex items-center gap-2 min-w-0">
             <FileText size={16} className="text-gray-400 shrink-0" />
             <span className="text-sm font-medium text-gray-700 truncate">
-              {fileName || "未选择文件"}
+              {bidFileName || "未选择文件"}
             </span>
           </div>
           <button
             onClick={handleSelectFile}
             className="text-xs px-3 py-1.5 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors shrink-0"
           >
-            {fileName ? "重新选择" : "选择文件"}
+            {bidFileName ? "重新选择" : "选择文件"}
           </button>
         </div>
 
         {/* 预览内容 */}
         <div ref={previewRef} className="flex-1 overflow-auto p-6 space-y-3">
-          {paragraphs.length === 0 && (
+          {bidParagraphs.length === 0 && (
             <div className="text-center text-gray-400 py-20 text-sm">
-              请选择本地 .docx / .pdf / .txt 文件进行校对
+              请选择本地 .docx / .doc 文件进行校对
             </div>
           )}
-          {paragraphs.map((p) => (
-            <div
-              key={p.index}
-              data-paragraph-index={p.index}
-              className={`p-3 rounded border transition-colors duration-300 ${
-                highlightedIdx === p.index
-                  ? "bg-yellow-50 border-yellow-300"
-                  : "border-transparent hover:bg-gray-50"
-              }`}
-            >
-              <div className="text-xs text-gray-400 mb-1">第 {p.index + 1} 段</div>
-              <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{p.text}</p>
-            </div>
-          ))}
+          {bidParagraphs.map((p) => {
+            const isHighlighted = highlightedIdx === p.index;
+            const isModified = modifiedIdxs.includes(p.index);
+            return (
+              <div
+                key={p.index}
+                data-paragraph-index={p.index}
+                className={`p-3 rounded border transition-colors duration-300 ${
+                  isHighlighted
+                    ? "bg-yellow-50 border-yellow-300"
+                    : isModified
+                    ? "bg-emerald-50 border-emerald-300"
+                    : "border-transparent hover:bg-gray-50"
+                }`}
+              >
+                <div className="text-xs text-gray-400 mb-1">第 {p.index + 1} 段</div>
+                <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{p.text}</p>
+              </div>
+            );
+          })}
         </div>
       </div>
+
+      {/* .doc 警告弹窗 */}
+      {showDocWarning && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 w-96 shadow-xl">
+            <h3 className="text-base font-semibold mb-2">格式提示</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              .doc 格式较旧，建议转换为 .docx 以获得最佳校对体验。是否继续？
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => { setShowDocWarning(false); setPendingDocPath(null); }}
+                className="px-4 py-2 rounded text-sm text-gray-600 hover:bg-gray-100"
+              >
+                取消
+              </button>
+              <button
+                onClick={confirmDocContinue}
+                className="px-4 py-2 rounded text-sm bg-blue-600 text-white hover:bg-blue-700"
+              >
+                继续
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 修复模式选择弹窗 */}
+      {showFixConfirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 w-[420px] shadow-xl">
+            <h3 className="text-base font-semibold mb-3">一键修复</h3>
+            <div className="mb-4">
+              {(() => {
+                const fixable = checkSelfReviewReport?.issues?.filter((i: any) => i.auto_fixable) || [];
+                const byCategory: Record<string, number> = {};
+                fixable.forEach((i: any) => {
+                  const cat = i.sub_category || i.category || '其他';
+                  byCategory[cat] = (byCategory[cat] || 0) + 1;
+                });
+                return (
+                  <div className="text-sm text-gray-600 mb-3">
+                    <p className="mb-1">发现 {fixable.length} 处可自动修复：</p>
+                    <ul className="list-disc list-inside space-y-0.5 text-gray-500">
+                      {Object.entries(byCategory).map(([cat, count]) => (
+                        <li key={cat}>{cat === 'punctuation' ? '标点符号' : cat}：{count} 处</li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })()}
+              <p className="text-sm font-medium text-gray-700 mb-2">修复方式：</p>
+              <label className="flex items-center gap-2 mb-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="fixMode"
+                  value="copy"
+                  checked={fixMode === 'copy'}
+                  onChange={() => setFixMode('copy')}
+                  className="text-blue-600"
+                />
+                <span className="text-sm text-gray-700">生成修复副本（推荐）</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="fixMode"
+                  value="overwrite"
+                  checked={fixMode === 'overwrite'}
+                  onChange={() => setFixMode('overwrite')}
+                  className="text-blue-600"
+                />
+                <span className="text-sm text-gray-700">直接覆盖原文件（自动备份 .bak）</span>
+              </label>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setShowFixConfirm(false)}
+                className="px-4 py-2 rounded text-sm text-gray-600 hover:bg-gray-100"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleFix}
+                disabled={fixing}
+                className="px-4 py-2 rounded text-sm bg-blue-600 text-white hover:bg-blue-700 disabled:bg-gray-300"
+              >
+                {fixing ? "修复中..." : "确认修复"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 修复结果弹窗 */}
+      {showFixResult && fixResult && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 w-[520px] max-h-[80vh] overflow-auto shadow-xl">
+            <h3 className="text-base font-semibold mb-3">修复完成</h3>
+            <div className="mb-4">
+              <p className="text-sm text-gray-700 mb-2">
+                ✅ 已修复 {fixResult.changes?.length || 0} 处问题
+              </p>
+              <p className="text-sm text-gray-600 mb-1">
+                📄 文件：{fixResult.output_path}
+              </p>
+              {fixResult.backup_path && (
+                <p className="text-sm text-gray-500">
+                  （原文件已覆盖，备份在 {fixResult.backup_path}）
+                </p>
+              )}
+            </div>
+
+            {fixResult.changes && fixResult.changes.length > 0 && (
+              <div className="mb-4">
+                <p className="text-sm font-medium text-gray-700 mb-2">修改明细：</p>
+                <table className="w-full text-sm border border-gray-200 rounded-lg overflow-hidden">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-3 py-2 text-left text-gray-600 font-medium border-b">段落</th>
+                      <th className="px-3 py-2 text-left text-gray-600 font-medium border-b">原文</th>
+                      <th className="px-3 py-2 text-left text-gray-600 font-medium border-b">修改后</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fixResult.changes.map((change: any, idx: number) => (
+                      <tr key={idx} className="border-b border-gray-100 last:border-0">
+                        <td className="px-3 py-2 text-gray-700">#{change.paragraph_index + 1}</td>
+                        <td className="px-3 py-2 text-red-600 font-mono text-xs">{change.original}</td>
+                        <td className="px-3 py-2 text-emerald-600 font-mono text-xs">{change.modified}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2">
+              {modifiedIdxs.length > 0 && (
+                <button
+                  onClick={() => { highlightModified(); setShowFixResult(false); }}
+                  className="px-4 py-2 rounded text-sm bg-emerald-600 text-white hover:bg-emerald-700"
+                >
+                  在预览区高亮显示修改
+                </button>
+              )}
+              <button
+                onClick={() => setShowFixResult(false)}
+                className="px-4 py-2 rounded text-sm text-gray-600 hover:bg-gray-100"
+              >
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

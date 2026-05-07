@@ -1,4 +1,4 @@
-import { Play, Download, Trash2, AlertTriangle, SearchCheck, FileCheck } from "lucide-react";
+import { Play, Download, Trash2, AlertTriangle, SearchCheck, FileCheck, Wrench } from "lucide-react";
 import type { RequirementItem } from "../contexts/RequirementsContext";
 
 export interface DeviationCheckResult {
@@ -58,6 +58,10 @@ interface CheckResultsPanelProps {
   onExportMd: () => void;
   onClear: () => void;
   onJumpToParagraph: (idx: number | undefined) => void;
+  onFix?: () => void;
+  hasFixableIssues?: boolean;
+  isDocFile?: boolean;
+  hasRequirements?: boolean;
 }
 
 const STATUS_META: Record<string, { border: string; label: string; bg: string }> = {
@@ -92,9 +96,14 @@ export default function CheckResultsPanel({
   onExportMd,
   onClear,
   onJumpToParagraph,
+  onFix,
+  hasFixableIssues,
+  isDocFile,
+  hasRequirements,
 }: CheckResultsPanelProps) {
   const checkedCount = requirements.filter((r) => r.checked).length;
   const hasResults = report || fatalRisks.length > 0 || (selfReviewReport && selfReviewReport.issues.length > 0);
+  const canRunCheck = hasRequirements && requirements.some((r) => r.checked);
 
   // 分类自查问题
   const { consistencyIssues, qualityIssues, formatIssues } = useMemo(() => {
@@ -142,9 +151,15 @@ export default function CheckResultsPanel({
           </div>
         )}
 
+        {!hasRequirements && (
+          <div className="text-xs text-amber-600 bg-amber-50 rounded px-3 py-2">
+            请先前往「需求上传」解析招标文件
+          </div>
+        )}
+
         <button
           onClick={onRunCheck}
-          disabled={loading}
+          disabled={loading || !canRunCheck}
           className="w-full flex items-center justify-center gap-2 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
         >
           <Play size={16} />
@@ -256,15 +271,29 @@ export default function CheckResultsPanel({
           </SectionCard>
         )}
 
-        {/* 导出按钮 */}
-        {report && (
-          <button
-            onClick={onExportMd}
-            className="w-full flex items-center justify-center gap-2 py-2 border border-gray-200 rounded-lg text-sm text-gray-700 hover:bg-gray-50 transition-colors"
-          >
-            <Download size={14} />
-            导出偏离报告（Markdown）
-          </button>
+        {/* 一键修复 + 导出按钮 */}
+        {hasResults && (
+          <div className="space-y-2">
+            {onFix && (
+              <button
+                onClick={onFix}
+                disabled={!hasFixableIssues || isDocFile}
+                className="w-full flex items-center justify-center gap-2 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+              >
+                <Wrench size={14} />
+                {isDocFile ? "请转换为 .docx 后使用一键修复" : "一键修复可修复项"}
+              </button>
+            )}
+            {report && (
+              <button
+                onClick={onExportMd}
+                className="w-full flex items-center justify-center gap-2 py-2 border border-gray-200 rounded-lg text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                <Download size={14} />
+                导出偏离报告（Markdown）
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>

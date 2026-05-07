@@ -830,6 +830,32 @@ mod tests {
         assert!(iso_item.response_text.is_none());
     }
 
+    /// B5: paragraph_index 与 parse_document.paragraphs 索引一致
+    #[test]
+    fn test_check_deviation_items_paragraph_index_aligned() {
+        // 构造 3 个非空段落的投标文本（与 parse_document.text 结构一致）
+        let bid_text = "第一段：我们提供7x24小时技术支持服务。\n\n第二段：我公司具有独立法人资格，注册资本1000万元。\n\n第三段：完全满足招标要求。";
+        let req = RequirementItem {
+            id: 1,
+            section: "1".to_string(),
+            text: "投标人必须具备法人资格".to_string(),
+            category: "商务".to_string(),
+            mandatory: true,
+            keywords: extract_keywords("投标人必须具备法人资格"),
+        };
+        let report = check_deviation_items(&[req], bid_text);
+        assert_eq!(report.total, 1);
+        // 第二段包含 "法人" 和 "资格"，paragraph_index 应为 1
+        assert_eq!(
+            report.items[0].paragraph_index,
+            Some(1),
+            "paragraph_index 应与 parse_document.paragraphs 索引对齐"
+        );
+        // 验证第二段文本确实包含匹配内容
+        let second_para = bid_text.lines().map(|s| s.trim()).filter(|s| !s.is_empty()).nth(1).unwrap();
+        assert!(second_para.contains("法人资格"));
+    }
+
     // ── T9-B3：边界处理 ──
 
     #[test]

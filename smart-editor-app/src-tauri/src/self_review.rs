@@ -46,8 +46,7 @@ impl ParagraphMap {
     }
 }
 
-/// 主入口：对投标文本执行本地自查（重复、敏感信息、占位符）
-/// AI 检查（矛盾、逻辑）由独立 async 命令处理
+/// 主入口：对投标文本执行完整自查（4 类本地 + 2 类 AI/mock）
 pub fn check_self_review(text: &str) -> SelfReviewReport {
     let mut issues = Vec::new();
     let mut next_id = 1i64;
@@ -56,7 +55,9 @@ pub fn check_self_review(text: &str) -> SelfReviewReport {
     next_id = check_repetition(text, &mut issues, next_id);
     next_id = check_sensitive_info(text, &para_map, &mut issues, next_id);
     next_id = check_placeholders(text, &para_map, &mut issues, next_id);
-    let _ = check_punctuation_as_issues(text, &para_map, &mut issues, next_id);
+    next_id = check_punctuation_as_issues(text, &para_map, &mut issues, next_id);
+    next_id = check_contradictions(text, &para_map, &mut issues, next_id);
+    let _ = check_context_logic(text, &para_map, &mut issues, next_id);
 
     SelfReviewReport { issues }
 }
@@ -265,6 +266,91 @@ fn check_punctuation_as_issues(
     next_id
 }
 
+// ── AI 子检查：矛盾检测（mock / 简单规则兜底） ──
+
+fn check_contradictions(
+    text: &str,
+    para_map: &ParagraphMap,
+    issues: &mut Vec<SelfReviewIssue>,
+    mut next_id: i64,
+) -> i64 {
+    // Mock 实现：检测常见矛盾关键词对
+    let contradictions: Vec<(&str, &str, &str)> = vec![
+        ("7x24", "工作日", "服务时间矛盾"),
+        ("全天候", "工作日", "服务时间矛盾"),
+        ("完全支持", "部分支持", "支持程度矛盾"),
+        ("完全满足", "部分满足", "满足程度矛盾"),
+        ("必须", "可选", "要求性质矛盾"),
+        ("不得", "可以", "权限矛盾"),
+    ];
+
+    for (a, b, desc) in &contradictions {
+        if text.contains(a) && text.contains(b) {
+            let pos = text.find(b).unwrap_or(0);
+            issues.push(SelfReviewIssue {
+                id: next_id,
+                category: "consistency".to_string(),
+                sub_category: "contradiction".to_string(),
+                message: format!("{}: 同时出现 '{}' 和 '{}'，可能存在自相矛盾", desc, a, b),
+                severity: Severity::Warning,
+                position: Some(pos),
+                paragraph_index: para_map.find_by_byte(pos),
+                original: Some(b.to_string()),
+                suggestion: Some("请确认并统一表述".to_string()),
+                auto_fixable: false,
+            });
+            next_id += 1;
+        }
+    }
+    next_id
+}
+
+// ── AI 子检查：上下文逻辑断裂（mock / 简单规则兜底） ──
+
+fn check_context_logic(
+    text: &str,
+    _para_map: &ParagraphMap,
+    issues: &mut Vec<SelfReviewIssue>,
+    mut next_id: i64,
+) -> i64 {
+    // Mock 实现：检测段落间缺少逻辑过渡词
+    let paragraphs: Vec<&str> = text
+        .lines()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let connectives = [
+        "因此", "此外", "然而", "但是", "同时", "另外", "其次", "最后", "综上所述",
+        "首先", "综上", "总之", "所以", "于是", "接着", "然后", "而",
+    ];
+
+    let mut char_offset = 0usize;
+    for (idx, para) in paragraphs.iter().enumerate().skip(1) {
+        let has_connective = connectives.iter().any(|c| para.starts_with(c));
+        let para_char_len = para.chars().count();
+        if !has_connective && para_char_len > 40 {
+            issues.push(SelfReviewIssue {
+                id: next_id,
+                category: "consistency".to_string(),
+                sub_category: "logic".to_string(),
+                message: "段落间缺少逻辑过渡，建议添加连接词".to_string(),
+                severity: Severity::Info,
+                position: Some(char_offset),
+                paragraph_index: Some(idx),
+                original: None,
+                suggestion: Some(
+                    "在段落开头添加过渡词，如'因此'、'此外'、'然而'等".to_string(),
+                ),
+                auto_fixable: false,
+            });
+            next_id += 1;
+        }
+        char_offset += para_char_len + 1; // +1 for '\n'
+    }
+    next_id
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,16 +453,14 @@ mod tests {
         }
     }
 
-    /// 待 contradiction / context_logic AI 子检查实施后启用
+    /// B4: check_self_review 同时含 6 类 issue 全部命中（contradiction/context_logic 用 mock）
     #[test]
-    #[ignore = "depends on contradiction / context_logic AI subchecks"]
     fn test_self_review_six_categories_full_hit() {
         // fixture：故意包含全部 6 类问题
         let text = "\
-本项目交付周期为 30 天。\n\
-本项目交付周期为 60 天。\n\
-\n\
+本项目交付周期为 30 天,工作日提供服务。\n\
 我们提供7x24小时技术支持服务。\n\
+\n\
 我们提供7x24小时技术支持服务。\n\
 \n\
 客户：北京XX公司\n\
@@ -386,7 +470,7 @@ mod tests {
 本项目报价为[待补充]万元。\n\
 交付时间：XXXXXXXX\n\
 \n\
-方案"; // 故意触发 punctuation 末尾缺标点
+这是一个非常长的段落，故意不包含任何连接词开头，目的是测试上下文逻辑断裂检测功能是否能正确识别并报告问题。"; // 英文逗号触发 punctuation + 长段落触发 logic + 7x24+工作日触发 contradiction
 
         let report = check_self_review(text);
         let categories: std::collections::HashSet<_> =

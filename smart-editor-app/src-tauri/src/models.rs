@@ -435,3 +435,30 @@ pub struct DraftRequest {
     pub references: Vec<String>,
     pub document_type: DocumentType,
 }
+
+/// 一键修复模式
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FixMode {
+    Copy,
+    Overwrite,
+}
+
+/// 段落修改明细
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParagraphChange {
+    pub paragraph_index: usize,
+    pub paragraph_text: String,
+    pub original: String,
+    pub modified: String,
+    pub issue_category: String,
+}
+
+/// 一键修复结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FixResult {
+    pub mode: FixMode,
+    pub output_path: String,
+    pub backup_path: Option<String>,
+    pub changes: Vec<ParagraphChange>,
+}

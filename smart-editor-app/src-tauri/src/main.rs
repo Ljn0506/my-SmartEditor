@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod ai;
+mod apply_self_review_fixes;
 mod category;
 mod clipboard;
 mod config;
@@ -47,12 +48,7 @@ impl AppState {
 // --- 文档解析命令 ---
 
 #[tauri::command]
-fn parse_document(file_path: String) -> Result<String, String> {
-    parser::parse_document(&file_path).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn parse_document_structured(file_path: String) -> Result<ParsedDocumentStructured, String> {
+fn parse_document(file_path: String) -> Result<ParsedDocumentStructured, String> {
     parser::parse_document_structured(&file_path).map_err(|e| e.to_string())
 }
 
@@ -517,6 +513,16 @@ async fn check_self_review_async(
     Ok(report)
 }
 
+#[tauri::command]
+fn apply_self_review_fixes(
+    file_path: String,
+    issues: Vec<crate::models::SelfReviewIssue>,
+    mode: crate::models::FixMode,
+) -> Result<crate::models::FixResult, String> {
+    crate::apply_self_review_fixes::apply_self_review_fixes(&file_path, &issues, mode)
+        .map_err(|e| e.to_string())
+}
+
 // --- 应用入口 ---
 
 fn main() {
@@ -563,7 +569,6 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             parse_document,
-            parse_document_structured,
             parse_requirement_file,
             parse_and_extract,
             create_template,
@@ -596,6 +601,7 @@ fn main() {
             check_punctuation,
             check_self_review,
             check_self_review_async,
+            apply_self_review_fixes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
