@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, ReactNode } from "react";
+import type { DeviationReport, FatalRisk, SelfReviewReport } from "../components/CheckResultsPanel";
 
 export interface RequirementItem {
   id: number;
@@ -32,12 +33,12 @@ interface RequirementsContextType {
   bidParagraphs: ParagraphInfo[];
   setBidParagraphs: (paragraphs: ParagraphInfo[]) => void;
   // 检查结果（CheckTab 运行）
-  checkReport: any | null;
-  setCheckReport: (report: any | null) => void;
-  checkFatalRisks: any[];
-  setCheckFatalRisks: (risks: any[]) => void;
-  checkSelfReviewReport: any | null;
-  setCheckSelfReviewReport: (report: any | null) => void;
+  checkReport: DeviationReport | null;
+  setCheckReport: (report: DeviationReport | null) => void;
+  checkFatalRisks: FatalRisk[];
+  setCheckFatalRisks: (risks: FatalRisk[]) => void;
+  checkSelfReviewReport: SelfReviewReport | null;
+  setCheckSelfReviewReport: (report: SelfReviewReport | null) => void;
 }
 
 const RequirementsContext = createContext<RequirementsContextType | undefined>(
@@ -53,9 +54,9 @@ export function RequirementsProvider({ children }: { children: ReactNode }) {
   const [bidFilePath, setBidFilePath] = useState<string | null>(null);
   const [bidFileName, setBidFileName] = useState<string | null>(null);
   const [bidParagraphs, setBidParagraphs] = useState<ParagraphInfo[]>([]);
-  const [checkReport, setCheckReport] = useState<any | null>(null);
-  const [checkFatalRisks, setCheckFatalRisks] = useState<any[]>([]);
-  const [checkSelfReviewReport, setCheckSelfReviewReport] = useState<any | null>(null);
+  const [checkReport, setCheckReport] = useState<DeviationReport | null>(null);
+  const [checkFatalRisks, setCheckFatalRisks] = useState<FatalRisk[]>([]);
+  const [checkSelfReviewReport, setCheckSelfReviewReport] = useState<SelfReviewReport | null>(null);
 
   return (
     <RequirementsContext.Provider

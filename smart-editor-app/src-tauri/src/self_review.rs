@@ -1,6 +1,61 @@
+use once_cell::sync::Lazy;
 use regex::Regex;
 
 use crate::models::{SelfReviewIssue, SelfReviewReport, Severity};
+
+// 预编译正则，避免每次调用重新创建
+static SENSITIVE_PATTERNS: Lazy<Vec<(&'static str, Regex, &'static str)>> = Lazy::new(|| {
+    vec![
+        (
+            "客户名称泄露",
+            Regex::new(r"(?:客户|甲方|招标人|用户)[：:]\s*(\S{2,10})").unwrap(),
+            "建议用'某客户'或'招标人'代替具体名称",
+        ),
+        (
+            "IP 地址泄露",
+            Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}\b").unwrap(),
+            "删除或替换为示意性 IP",
+        ),
+        (
+            "内部域名泄露",
+            Regex::new(r"(?:[\w-]+\.(?:internal|corp|local))\b").unwrap(),
+            "删除内部域名信息",
+        ),
+        (
+            "银行账号泄露",
+            Regex::new(r"\b(?:\d{4}\s?){3,6}\d{2,4}\b").unwrap(),
+            "删除或脱敏银行账号",
+        ),
+        (
+            "手机号泄露",
+            Regex::new(r"\b1[3-9]\d{9}\b").unwrap(),
+            "删除或脱敏手机号",
+        ),
+    ]
+});
+
+static PLACEHOLDER_PATTERNS: Lazy<Vec<(&'static str, Regex, &'static str, Severity)>> = Lazy::new(|| {
+    vec![
+        (
+            "[待补充] 占位符",
+            Regex::new(r"\[待补充\]|\[待定\]|\[待完善\]|\[待填写\]|\[待确认\]").unwrap(),
+            "请替换为实际内容",
+            Severity::Error,
+        ),
+        (
+            "XXX / ____ 占位符",
+            Regex::new(r"XXX+|_{3,}|\*{3,}|【.*?】").unwrap(),
+            "请替换为实际内容",
+            Severity::Error,
+        ),
+        (
+            "日期/金额占位符",
+            Regex::new(r"\d{4}年?\s*[-—]\s*月\s*[-—]\s*日|金额[:：]\s*[-—]+").unwrap(),
+            "请填写具体日期或金额",
+            Severity::Warning,
+        ),
+    ]
+});
 
 /// 预计算段落位置映射，避免 O(N²) 扫描
 struct ParagraphMap {
@@ -18,10 +73,11 @@ impl ParagraphMap {
 
         for line in text.lines() {
             let line_byte_len = line.len() + 1; // +1 for '\n'
-            let line_char_len = line.chars().count() + 1;
+            let char_count = line.chars().count();
+            let line_char_len = char_count + 1;
             if !line.trim().is_empty() {
                 byte_ranges.push((byte_pos, byte_pos + line.len(), idx));
-                char_ranges.push((char_pos, char_pos + line.chars().count(), idx));
+                char_ranges.push((char_pos, char_pos + char_count, idx));
                 idx += 1;
             }
             byte_pos += line_byte_len;
@@ -62,13 +118,21 @@ pub fn check_self_review(text: &str) -> SelfReviewReport {
     SelfReviewReport { issues }
 }
 
+// ── 共享工具 ──
+
+fn non_empty_paragraphs(text: &str) -> Vec<&str> {
+    text.lines()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 // ── 重复段落检测 ──
 
 fn check_repetition(text: &str, issues: &mut Vec<SelfReviewIssue>, mut next_id: i64) -> i64 {
-    let paragraphs: Vec<&str> = text
-        .lines()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty() && s.len() > 20)
+    let paragraphs: Vec<&str> = non_empty_paragraphs(text)
+        .into_iter()
+        .filter(|s| s.len() > 20)
         .collect();
 
     for i in 0..paragraphs.len() {
@@ -139,35 +203,7 @@ fn check_sensitive_info(
     issues: &mut Vec<SelfReviewIssue>,
     mut next_id: i64,
 ) -> i64 {
-    let patterns: Vec<(&str, Regex, &str)> = vec![
-        (
-            "客户名称泄露",
-            Regex::new(r"(?:客户|甲方|招标人|用户)[：:]\s*(\S{2,10})").unwrap(),
-            "建议用'某客户'或'招标人'代替具体名称",
-        ),
-        (
-            "IP 地址泄露",
-            Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}\b").unwrap(),
-            "删除或替换为示意性 IP",
-        ),
-        (
-            "内部域名泄露",
-            Regex::new(r"(?:[\w-]+\.(?:internal|corp|local))\b").unwrap(),
-            "删除内部域名信息",
-        ),
-        (
-            "银行账号泄露",
-            Regex::new(r"\b(?:\d{4}\s?){3,6}\d{2,4}\b").unwrap(),
-            "删除或脱敏银行账号",
-        ),
-        (
-            "手机号泄露",
-            Regex::new(r"\b1[3-9]\d{9}\b").unwrap(),
-            "删除或脱敏手机号",
-        ),
-    ];
-
-    for (msg_template, re, suggestion) in &patterns {
+    for (msg_template, re, suggestion) in SENSITIVE_PATTERNS.iter() {
         for cap in re.captures_iter(text) {
             let matched = cap.get(0).map(|m| m.as_str()).unwrap_or("");
             let pos = cap.get(0).map(|m| m.start()).unwrap_or(0);
@@ -197,28 +233,7 @@ fn check_placeholders(
     issues: &mut Vec<SelfReviewIssue>,
     mut next_id: i64,
 ) -> i64 {
-    let patterns: Vec<(&str, Regex, &str, Severity)> = vec![
-        (
-            "[待补充] 占位符",
-            Regex::new(r"\[待补充\]|\[待定\]|\[待完善\]|\[待填写\]|\[待确认\]").unwrap(),
-            "请替换为实际内容",
-            Severity::Error,
-        ),
-        (
-            "XXX / ____ 占位符",
-            Regex::new(r"XXX+|_{3,}|\*{3,}|【.*?】").unwrap(),
-            "请替换为实际内容",
-            Severity::Error,
-        ),
-        (
-            "日期/金额占位符",
-            Regex::new(r"\d{4}年?\s*[-—]\s*月\s*[-—]\s*日|金额[:：]\s*[-—]+").unwrap(),
-            "请填写具体日期或金额",
-            Severity::Warning,
-        ),
-    ];
-
-    for (msg_template, re, suggestion, severity) in &patterns {
+    for (msg_template, re, suggestion, severity) in PLACEHOLDER_PATTERNS.iter() {
         for mat in re.find_iter(text) {
             let matched = mat.as_str();
             issues.push(SelfReviewIssue {
@@ -314,11 +329,7 @@ fn check_context_logic(
     mut next_id: i64,
 ) -> i64 {
     // Mock 实现：检测段落间缺少逻辑过渡词
-    let paragraphs: Vec<&str> = text
-        .lines()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
+    let paragraphs: Vec<&str> = non_empty_paragraphs(text);
 
     let connectives = [
         "因此", "此外", "然而", "但是", "同时", "另外", "其次", "最后", "综上所述",

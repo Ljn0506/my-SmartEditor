@@ -143,7 +143,7 @@ fn parse_docx(file_path: &str) -> Result<(String, Vec<Paragraph>)> {
     Ok((text, paragraphs))
 }
 
-fn extract_paragraph_text(p: &docx_rs::Paragraph, buf: &mut String) {
+pub(crate) fn extract_paragraph_text(p: &docx_rs::Paragraph, buf: &mut String) {
     for para_child in &p.children {
         if let docx_rs::ParagraphChild::Run(r) = para_child {
             for run_child in &r.children {
@@ -153,6 +153,12 @@ fn extract_paragraph_text(p: &docx_rs::Paragraph, buf: &mut String) {
             }
         }
     }
+}
+
+pub(crate) fn extract_paragraph_text_to_string(p: &docx_rs::Paragraph) -> String {
+    let mut buf = String::new();
+    extract_paragraph_text(p, &mut buf);
+    buf
 }
 
 fn parse_pdf(file_path: &str) -> Result<String> {

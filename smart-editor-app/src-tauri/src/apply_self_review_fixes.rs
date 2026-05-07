@@ -67,9 +67,9 @@ pub fn apply_self_review_fixes(
 
                 if has_text {
                     if let Some(fixes) = fixes_by_para.get(&para_idx) {
-                        let para_text_before = extract_paragraph_text(p);
+                        let para_text_before = crate::parser::extract_paragraph_text_to_string(p);
                         apply_fixes_to_paragraph(p, fixes);
-                        let para_text_after = extract_paragraph_text(p);
+                        let para_text_after = crate::parser::extract_paragraph_text_to_string(p);
                         // 记录修改明细
                         for (orig, sugg, category) in fixes {
                             if para_text_before != para_text_after || para_text_before.contains(orig)
@@ -117,7 +117,7 @@ pub fn apply_self_review_fixes(
                                 let docx_rs::TableRowChild::TableCell(cell) = cell_child;
                                 for cell_content in &cell.children {
                                     if let docx_rs::TableCellContent::Paragraph(p) = cell_content {
-                                        para_text_before.push_str(&extract_paragraph_text(p));
+                                        para_text_before.push_str(&crate::parser::extract_paragraph_text_to_string(p));
                                     }
                                 }
                             }
@@ -189,20 +189,6 @@ pub fn apply_self_review_fixes(
         backup_path: backup_path_str,
         changes,
     })
-}
-
-fn extract_paragraph_text(p: &docx_rs::Paragraph) -> String {
-    let mut text = String::new();
-    for para_child in &p.children {
-        if let docx_rs::ParagraphChild::Run(r) = para_child {
-            for run_child in &r.children {
-                if let docx_rs::RunChild::Text(t) = run_child {
-                    text.push_str(&t.text);
-                }
-            }
-        }
-    }
-    text
 }
 
 fn apply_fixes_to_paragraph(
