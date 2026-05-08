@@ -182,6 +182,94 @@ impl AiClient {
             .map_err(|e| AppError::Ai(format!("逻辑检测 JSON 解析失败: {}", e)))?;
         Ok(items.into_iter().map(|it| it.to_issue("logic")).collect())
     }
+
+    /// Phase 2: 生成文档章节大纲
+    pub async fn generate_outline(
+        &self,
+        requirements: &str,
+        doc_type: DocumentType,
+        references: &[String],
+    ) -> Result<Vec<crate::models::CardOutline>> {
+        let prompt = build_outline_prompt(requirements, doc_type.clone(), references);
+        let response = self.chat(&prompt).await?;
+        let json_str = extract_json_array(&response)?;
+        let items: Vec<OutlineItem> = serde_json::from_str(json_str)
+            .map_err(|e| AppError::Ai(format!("大纲 JSON 解析失败: {}", e)))?;
+        let target = match doc_type {
+            crate::models::DocumentType::Technical => "technical",
+            crate::models::DocumentType::Business => "business",
+        };
+        Ok(items
+            .into_iter()
+            .enumerate()
+            .map(|(i, it)| crate::models::CardOutline {
+                id: format!("{}-{}", target, i + 1),
+                chapter: it.chapter,
+                title: it.title,
+                document_target: target.to_string(),
+            })
+            .collect())
+    }
+
+    /// Phase 2: 跨卡片一致性检查
+    pub async fn check_consistency(
+        &self,
+        cards: &[crate::models::Card],
+    ) -> Result<crate::models::ConsistencyReport> {
+        let prompt = build_consistency_prompt(cards);
+        let response = self.chat(&prompt).await?;
+        let json_str = extract_json_array(&response)?;
+        let items: Vec<ConsistencyItem> = serde_json::from_str(json_str)
+            .map_err(|e| AppError::Ai(format!("一致性检查 JSON 解析失败: {}", e)))?;
+        let issues: Vec<crate::models::ConsistencyIssue> = items
+            .into_iter()
+            .map(|it| crate::models::ConsistencyIssue {
+                parameter: it.parameter,
+                expected_value: it.expected_value,
+                actual_value: it.actual_value,
+                location: it.location,
+                severity: match it.severity.as_str() {
+                    "Error" => crate::models::Severity::Error,
+                    "Warning" => crate::models::Severity::Warning,
+                    _ => crate::models::Severity::Info,
+                },
+            })
+            .collect();
+        Ok(crate::models::ConsistencyReport {
+            total_checked: cards.len(),
+            issues,
+        })
+    }
+
+    /// Phase 2: 生成单个章节内容
+    pub async fn generate_chapter(
+        &self,
+        title: &str,
+        chapter: &str,
+        requirements: &str,
+        references: &[String],
+        doc_type: DocumentType,
+    ) -> Result<String> {
+        let prompt = build_chapter_prompt(title, chapter, requirements, references, doc_type);
+        self.chat(&prompt).await
+    }
+}
+
+/// Phase 2: AI 返回的一致性检查项
+#[derive(Debug, serde::Deserialize)]
+struct ConsistencyItem {
+    parameter: String,
+    expected_value: String,
+    actual_value: String,
+    location: String,
+    severity: String,
+}
+
+/// Phase 2: AI 返回的大纲项
+#[derive(Debug, serde::Deserialize)]
+struct OutlineItem {
+    chapter: String,
+    title: String,
 }
 
 /// AI 返回的审查项中间格式
@@ -424,6 +512,162 @@ fn build_business_draft_prompt(requirements: &str, references: &[String]) -> Str
 请直接输出文档内容。"#,
         requirements, refs
     )
+}
+
+fn build_consistency_prompt(cards: &[crate::models::Card]) -> String {
+    let mut cards_text = String::new();
+    for card in cards {
+        cards_text.push_str(&format!(
+            "
+## {} {}
+{}
+",
+            card.chapter, card.title, card.content
+        ));
+    }
+    format!(
+        r#"你是一位文档一致性审查专家，擅长发现多章节文档中的参数矛盾和承诺不一致。
+
+请分析以下各章节内容，找出所有参数、承诺、指标不一致之处。重点关注：
+- 技术指标（QPS、并发数、存储容量、带宽等）前后不一致
+- 时间承诺（工期、交付日期、维保期限等）前后不一致
+- 人员配置（项目经理、团队规模等）前后不一致
+- 商务条款（报价、付款方式、服务范围等）前后不一致
+
+对每个不一致，输出以下字段：
+- parameter: 参数名称
+- expected_value: 前面章节中的值（或更合理的值）
+- actual_value: 后面章节中矛盾的值
+- location: 出现在哪个章节（如"3.1 系统架构"）
+- severity: "Error"（严重矛盾）或 "Warning"（一般差异）
+
+输出严格的 JSON 数组格式，不要包含任何其他文字：
+[
+  {{"parameter": "系统并发能力", "expected_value": "10000 QPS", "actual_value": "5000 QPS", "location": "3.2 性能设计", "severity": "Error"}}
+]
+
+各章节内容：
+{}"#,
+        cards_text.chars().take(12000).collect::<String>()
+    )
+}
+
+fn build_outline_prompt(requirements: &str, doc_type: DocumentType, references: &[String]) -> String {
+    let doc_type_desc = match doc_type {
+        crate::models::DocumentType::Technical => "技术方案",
+        crate::models::DocumentType::Business => "商务响应文档",
+    };
+    let refs = if references.is_empty() {
+        "暂无参考资料".to_string()
+    } else {
+        references.join("
+
+---
+
+")
+    };
+    format!(
+        r#"你是一位资深投标专家，擅长编写{}的章节结构。
+
+请根据以下招标需求和参考资料，设计一份完整的{}章节大纲。
+
+## 核心约束
+你只能基于参考资料中的历史素材进行改写、重组，严禁凭空生成不存在的章节或内容。
+
+## 招标需求
+{}
+
+## 参考资料（来自知识库历史素材）
+{}
+
+## 输出要求
+1. 章节编号规范（如 1. 概述, 2. 需求分析, 3.1 系统架构）
+2. 每个章节包含：chapter（编号）、title（标题）
+3. 章节数量 5-10 个，覆盖需求中的所有关键点
+4. 输出严格的 JSON 数组格式，不要包含任何其他文字：
+[
+  {{"chapter": "1", "title": "项目概述"}},
+  {{"chapter": "2", "title": "需求分析"}},
+  {{"chapter": "3.1", "title": "系统架构设计"}}
+]"#,
+        doc_type_desc, doc_type_desc,
+        requirements.chars().take(6000).collect::<String>(),
+        refs.chars().take(4000).collect::<String>()
+    )
+}
+
+fn build_chapter_prompt(
+    title: &str,
+    chapter: &str,
+    requirements: &str,
+    references: &[String],
+    doc_type: DocumentType,
+) -> String {
+    let refs = if references.is_empty() {
+        "暂无参考资料".to_string()
+    } else {
+        references.join("
+
+---
+
+")
+    };
+    let doc_type_desc = match doc_type {
+        crate::models::DocumentType::Technical => "技术方案",
+        crate::models::DocumentType::Business => "商务响应文档",
+    };
+    format!(
+        r#"你是一位资深投标专家，擅长编写{}的正文内容。
+
+请撰写以下章节的内容：
+
+## 章节信息
+- 编号：{}
+- 标题：{}
+
+## 核心约束（必须遵守）
+1. 你只能基于参考资料中的历史素材进行改写、重组，严禁凭空生成不存在的内容。
+2. 严禁编造任何具体参数（QPS、并发数、节点数、金额、工期、人员数量等）。遇到参数必须使用占位符格式 [PARAM:参数名]。
+3. 占位符示例：系统峰值处理能力达到 [PARAM:qps] QPS；项目工期为 [PARAM:duration] 个月；报价总额为 [PARAM:amount] 元。
+
+## 招标需求（全文）
+{}
+
+## 参考资料（来自知识库历史素材）
+{}
+
+## 输出要求
+1. 内容专业、详实，至少 300 字
+2. 直接输出正文内容，使用 Markdown 格式
+3. 标题层级从二级开始（##）
+4. 对模糊需求给出合理假设并标注"[待确认]"
+5. 不要输出章节编号，只输出标题和正文
+
+请直接输出内容。"#,
+        doc_type_desc,
+        chapter,
+        title,
+        requirements.chars().take(5000).collect::<String>(),
+        refs.chars().take(5000).collect::<String>()
+    )
+}
+
+/// Phase 2: 从 AI 生成的内容中提取 [PARAM:xxx] 占位符
+pub fn extract_param_placeholders(text: &str) -> Vec<crate::models::ParamPlaceholder> {
+    let re = regex::Regex::new(r"\[PARAM:([^\]]+)\]").unwrap();
+    let mut placeholders = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for cap in re.captures_iter(text) {
+        let key = cap[1].trim().to_string();
+        if seen.insert(key.clone()) {
+            placeholders.push(crate::models::ParamPlaceholder {
+                key: key.clone(),
+                label: key.clone(),
+                default_value: None,
+            });
+        }
+    }
+    placeholders
 }
 
 fn extract_json(text: &str) -> Result<&str> {

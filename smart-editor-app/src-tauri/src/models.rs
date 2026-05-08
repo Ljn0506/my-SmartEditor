@@ -276,6 +276,7 @@ pub struct SearchResult {
     pub project_phase: Option<ProjectPhase>,
     pub tags: Vec<String>,
     pub relevance: f64,
+    pub source_file: Option<String>,
 }
 
 /// 解析后的文档内容（预留：文档导入解析功能使用）
@@ -461,4 +462,82 @@ pub struct FixResult {
     pub output_path: String,
     pub backup_path: Option<String>,
     pub changes: Vec<ParagraphChange>,
+}
+
+
+// ========== Phase 2: 智能生成卡片模型 ==========
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CardStatus {
+    Draft,
+    Confirmed,
+    Rejected,
+}
+
+impl CardStatus {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::Confirmed => "confirmed",
+            Self::Rejected => "rejected",
+        }
+    }
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "draft" => Some(Self::Draft),
+            "confirmed" => Some(Self::Confirmed),
+            "rejected" => Some(Self::Rejected),
+            _ => None,
+        }
+    }
+}
+
+/// 章节大纲（生成前）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CardOutline {
+    pub id: String,
+    pub chapter: String,
+    pub title: String,
+    pub document_target: String,
+}
+
+/// 参数占位符
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParamPlaceholder {
+    pub key: String,
+    pub label: String,
+    pub default_value: Option<String>,
+}
+
+/// 章节卡片（生成后）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Card {
+    pub id: String,
+    pub chapter: String,
+    pub title: String,
+    pub content: String,
+    pub source_refs: Vec<String>,
+    pub document_target: String,
+    pub status: CardStatus,
+    pub generated_by: String,
+    pub related_cards: Vec<String>,
+    pub param_placeholders: Vec<ParamPlaceholder>,
+}
+
+/// 一致性检查问题项
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsistencyIssue {
+    pub parameter: String,
+    pub expected_value: String,
+    pub actual_value: String,
+    pub location: String,
+    pub severity: Severity,
+}
+
+/// 一致性检查报告
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsistencyReport {
+    pub total_checked: usize,
+    pub issues: Vec<ConsistencyIssue>,
 }

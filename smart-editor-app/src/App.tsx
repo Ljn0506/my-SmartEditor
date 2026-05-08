@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import TiptapEditor from "./components/TiptapEditor";
 import LibraryTab from "./components/LibraryTab";
+import GenerateTab from "./components/GenerateTab";
 import { RequirementsProvider } from "./contexts/RequirementsContext";
 import CheckResultsPanel, {
   type DeviationReport,
@@ -28,7 +29,7 @@ type TabKey = "upload" | "library" | "push" | "check" | "settings";
 const tabs: { key: TabKey; label: string; icon: React.ReactNode }[] = [
   { key: "upload", label: "需求上传", icon: <Upload size={16} /> },
   { key: "library", label: "模板库", icon: <Library size={16} /> },
-  { key: "push", label: "智能推送", icon: <Sparkles size={16} /> },
+  { key: "push", label: "智能生成", icon: <Sparkles size={16} /> },
   { key: "check", label: "校对", icon: <SearchCheck size={16} /> },
   { key: "settings", label: "设置", icon: <Settings size={16} /> },
 ];
@@ -110,7 +111,7 @@ function App() {
               <div className="flex-1 overflow-auto">
                 {activeTab === "upload" && <UploadTab />}
                 {activeTab === "library" && <LibraryTab editor={editor} />}
-                {activeTab === "push" && <PushTab />}
+                {activeTab === "push" && <GenerateTab onNavigateToCheck={() => setActiveTab("check")} />}
                 {activeTab === "settings" && <SettingsTab />}
               </div>
             </div>
@@ -387,22 +388,8 @@ function UploadTab() {
   );
 }
 
-// ========== 智能推送标签页 ==========
-function PushTab() {
-  return (
-    <div className="h-full p-6">
-      <h2 className="text-base font-semibold mb-4 flex items-center gap-2">
-        <Sparkles size={18} />
-        智能内容推送
-      </h2>
-      <div className="bg-white rounded-lg border border-gray-200 p-6">
-        <p className="text-gray-500 text-center py-10">
-          在编辑器中输入内容，系统将自动识别关键词并推送相关模板...
-        </p>
-      </div>
-    </div>
-  );
-}
+// ========== 智能生成标签页 ==========
+// PushTab 已升级为 GenerateTab 组件（见 components/GenerateTab.tsx）
 
 function CheckTabFullScreen() {
   const {

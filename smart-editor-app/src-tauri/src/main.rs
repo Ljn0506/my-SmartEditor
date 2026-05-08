@@ -37,6 +37,7 @@ pub struct AppState {
     search: Option<SearchEngine>,
     ai: Mutex<AiClient>,
     config_path: PathBuf,
+
 }
 
 impl AppState {
@@ -520,6 +521,155 @@ fn apply_self_review_fixes(
         .map_err(|e| e.to_string())
 }
 
+// --- Phase 2: 智能生成命令 ---
+
+#[tauri::command]
+async fn generate_outline(
+    state: tauri::State<'_, AppState>,
+    requirements_text: String,
+    doc_type: crate::models::DocumentType,
+) -> Result<Vec<crate::models::CardOutline>, String> {
+    // 从知识库检索相关素材
+    let mut refs: Vec<String> = vec![];
+    if let Some(search) = state.search.as_ref() {
+        // 简单提取前几个关键词组合进行搜索
+        let queries: Vec<&str> = requirements_text.split_whitespace().take(5).collect();
+        for q in queries {
+            if q.len() >= 2 {
+                match search.search(q, 2).await {
+                    Ok(results) => {
+                        for r in results {
+                            if !r.content.is_empty() {
+                                refs.push(format!("{}
+{}", r.title, r.content));
+                            }
+                        }
+                    }
+                    Err(e) => log::warn!("知识库搜索失败: {}", e),
+                }
+            }
+        }
+        refs.sort();
+        refs.dedup();
+        refs.truncate(5);
+    }
+
+    let ai = state.ai_client().map_err(|e| e.to_string())?;
+    ai.generate_outline(&requirements_text, doc_type, &refs)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn generate_card(
+    state: tauri::State<'_, AppState>,
+    outline: crate::models::CardOutline,
+    requirements_text: String,
+    _references: Vec<String>,
+    doc_type: crate::models::DocumentType,
+) -> Result<crate::models::Card, String> {
+    // 从知识库搜索相关素材
+    let mut refs: Vec<String> = vec![];
+    let mut source_files: Vec<String> = vec![];
+    if let Some(search) = state.search.as_ref() {
+        match search.search(&outline.title, 3).await {
+            Ok(results) => {
+                for r in results {
+                    if !r.content.is_empty() {
+                        refs.push(format!("{}
+{}", r.title, r.content));
+                    }
+                    if let Some(sf) = r.source_file {
+                        if !sf.is_empty() {
+                            source_files.push(sf);
+                        }
+                    }
+                }
+            }
+            Err(e) => log::warn!("知识库搜索失败: {}", e),
+        }
+    }
+    source_files.sort();
+    source_files.dedup();
+
+    let ai = state.ai_client().map_err(|e| e.to_string())?;
+    let content = ai
+        .generate_chapter(&outline.title, &outline.chapter, &requirements_text, &refs, doc_type)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // 提取 [PARAM:xxx] 占位符
+    let param_placeholders = crate::ai::extract_param_placeholders(&content);
+
+    Ok(crate::models::Card {
+        id: outline.id,
+        chapter: outline.chapter,
+        title: outline.title,
+        content,
+        source_refs: source_files,
+        document_target: outline.document_target,
+        status: crate::models::CardStatus::Draft,
+        generated_by: "ai".to_string(),
+        related_cards: vec![],
+        param_placeholders,
+    })
+}
+
+#[tauri::command]
+fn save_cards(
+    state: tauri::State<'_, AppState>,
+    document_target: String,
+    cards: Vec<crate::models::Card>,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.save_cards(&document_target, &cards).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_cards(
+    state: tauri::State<'_, AppState>,
+    document_target: String,
+) -> Result<Vec<crate::models::Card>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_cards(&document_target).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_card(
+    state: tauri::State<'_, AppState>,
+    _document_target: String,
+    card: crate::models::Card,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.update_card(&card).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn confirm_all_cards(
+    state: tauri::State<'_, AppState>,
+    document_target: String,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let mut cards = db.get_cards(&document_target).map_err(|e| e.to_string())?;
+    for card in cards.iter_mut() {
+        if card.status == crate::models::CardStatus::Draft {
+            card.status = crate::models::CardStatus::Confirmed;
+        }
+    }
+    db.save_cards(&document_target, &cards).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn check_consistency(
+    state: tauri::State<'_, AppState>,
+    cards: Vec<crate::models::Card>,
+) -> Result<crate::models::ConsistencyReport, String> {
+    let ai = state.ai_client().map_err(|e| e.to_string())?;
+    ai.check_consistency(&cards)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 // --- 应用入口 ---
 
 fn main() {
@@ -561,6 +711,7 @@ fn main() {
                 search,
                 ai: Mutex::new(ai),
                 config_path,
+
             });
             Ok(())
         })
@@ -599,6 +750,13 @@ fn main() {
             check_self_review,
             check_self_review_async,
             apply_self_review_fixes,
+            generate_outline,
+            generate_card,
+            save_cards,
+            get_cards,
+            update_card,
+            confirm_all_cards,
+            check_consistency,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -37,6 +37,31 @@ impl Database {
             )",
             [],
         )?;
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS cards (
+                id TEXT PRIMARY KEY,
+                chapter TEXT NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                source_refs TEXT NOT NULL DEFAULT '[]',
+                document_target TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'draft',
+                generated_by TEXT NOT NULL DEFAULT 'ai',
+                related_cards TEXT NOT NULL DEFAULT '[]',
+                param_placeholders TEXT NOT NULL DEFAULT '[]',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cards_document_target ON cards(document_target)",
+            [],
+        )?;
+        self.conn.execute(
+            "ALTER TABLE cards ADD COLUMN IF NOT EXISTS param_placeholders TEXT NOT NULL DEFAULT '[]'",
+            [],
+        ).ok();
         for stmt in [
             "CREATE INDEX IF NOT EXISTS idx_templates_doc_attr ON templates(doc_attr)",
             "CREATE INDEX IF NOT EXISTS idx_templates_business_domain ON templates(business_domain)",
@@ -202,6 +227,108 @@ impl Database {
             use_count: row.get(14)?,
             rating: row.get(15)?,
         })
+    }
+
+    // --- Phase 2: 卡片持久化 ---
+
+    pub fn save_cards(&self, document_target: &str, cards: &[crate::models::Card]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        // 先删除该文档目标下的旧卡片
+        tx.execute("DELETE FROM cards WHERE document_target = ?1", [document_target])?;
+        // 批量插入
+        for card in cards {
+            let source_refs_json = serde_json::to_string(&card.source_refs)?;
+            let related_json = serde_json::to_string(&card.related_cards)?;
+            let param_json = serde_json::to_string(&card.param_placeholders)?;
+            tx.execute(
+                "INSERT INTO cards (
+                    id, chapter, title, content, source_refs, document_target,
+                    status, generated_by, related_cards, param_placeholders
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    card.id,
+                    card.chapter,
+                    card.title,
+                    card.content,
+                    source_refs_json,
+                    card.document_target,
+                    card.status.as_str(),
+                    card.generated_by,
+                    related_json,
+                    param_json,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn get_cards(&self, document_target: &str) -> Result<Vec<crate::models::Card>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, chapter, title, content, source_refs, document_target,
+                    status, generated_by, related_cards, param_placeholders
+             FROM cards WHERE document_target = ?1 ORDER BY chapter"
+        )?;
+        let rows = stmt.query_map([document_target], |row| {
+            let source_refs_str: String = row.get(4)?;
+            let related_str: String = row.get(8)?;
+            let status_str: String = row.get(6)?;
+            let param_str: String = row.get(9)?;
+            Ok(crate::models::Card {
+                id: row.get(0)?,
+                chapter: row.get(1)?,
+                title: row.get(2)?,
+                content: row.get(3)?,
+                source_refs: serde_json::from_str(&source_refs_str).unwrap_or_default(),
+                document_target: row.get(5)?,
+                status: crate::models::CardStatus::from_str(&status_str)
+                    .unwrap_or(crate::models::CardStatus::Draft),
+                generated_by: row.get(7)?,
+                related_cards: serde_json::from_str(&related_str).unwrap_or_default(),
+                param_placeholders: serde_json::from_str(&param_str).unwrap_or_default(),
+            })
+        })?;
+        let mut cards = Vec::new();
+        for card in rows {
+            cards.push(card?);
+        }
+        Ok(cards)
+    }
+
+    pub fn update_card(&self, card: &crate::models::Card) -> Result<()> {
+        let source_refs_json = serde_json::to_string(&card.source_refs)?;
+        let related_json = serde_json::to_string(&card.related_cards)?;
+        let param_json = serde_json::to_string(&card.param_placeholders)?;
+        let rows = self.conn.execute(
+            "UPDATE cards SET
+                chapter = ?1,
+                title = ?2,
+                content = ?3,
+                source_refs = ?4,
+                document_target = ?5,
+                status = ?6,
+                generated_by = ?7,
+                related_cards = ?8,
+                param_placeholders = ?9,
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?10",
+            params![
+                card.chapter,
+                card.title,
+                card.content,
+                source_refs_json,
+                card.document_target,
+                card.status.as_str(),
+                card.generated_by,
+                related_json,
+                param_json,
+                card.id,
+            ],
+        )?;
+        if rows == 0 {
+            return Err(AppError::Validation(format!("卡片 {} 不存在", card.id)));
+        }
+        Ok(())
     }
 }
 
