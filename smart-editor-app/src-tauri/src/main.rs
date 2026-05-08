@@ -19,6 +19,7 @@ mod self_review;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::{Emitter, Manager};
 
 use crate::ai::AiClient;
@@ -485,19 +486,21 @@ async fn check_self_review_async(
     // 1. 本地检查（重复 / 敏感信息 / 占位符 / 标点）
     let mut report = self_review::check_self_review(&text);
 
-    // 2. AI 检查（矛盾 / 逻辑）并行执行
+    // 2. AI 检查（矛盾 / 逻辑）并行执行，带 60s 超时
     let ai = state.ai_client().map_err(|e| e.to_string())?;
     let (contradiction_result, logic_result) = tokio::join!(
-        ai.check_contradictions(&text),
-        ai.check_context_logic(&text),
+        tokio::time::timeout(Duration::from_secs(60), ai.check_contradictions(&text)),
+        tokio::time::timeout(Duration::from_secs(60), ai.check_context_logic(&text)),
     );
     match contradiction_result {
-        Ok(mut issues) => report.issues.append(&mut issues),
-        Err(e) => log::warn!("AI 矛盾检测失败: {}", e),
+        Ok(Ok(mut issues)) => report.issues.append(&mut issues),
+        Ok(Err(e)) => log::warn!("AI 矛盾检测失败: {}", e),
+        Err(_) => log::warn!("AI 矛盾检测超时（60s），已降级为仅本地检查"),
     }
     match logic_result {
-        Ok(mut issues) => report.issues.append(&mut issues),
-        Err(e) => log::warn!("AI 逻辑检测失败: {}", e),
+        Ok(Ok(mut issues)) => report.issues.append(&mut issues),
+        Ok(Err(e)) => log::warn!("AI 逻辑检测失败: {}", e),
+        Err(_) => log::warn!("AI 逻辑检测超时（60s），已降级为仅本地检查"),
     }
 
     // 3. 重新编号 + 按 severity 排序

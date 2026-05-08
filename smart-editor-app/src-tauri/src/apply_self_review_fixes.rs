@@ -163,11 +163,15 @@ pub fn apply_self_review_fixes(
         }
         FixMode::Overwrite => {
             let backup_path = parent.join(format!("{}.bak", file_stem));
-            // 尝试创建备份
-            let backup_result = std::fs::copy(file_path, &backup_path);
-            let backup_path_str = backup_result
-                .ok()
-                .map(|_| backup_path.to_string_lossy().to_string());
+            // 尝试创建备份，失败时直接返回 Err，拒绝覆盖原文件
+            std::fs::copy(file_path, &backup_path).map_err(|e| {
+                AppError::Io(format!(
+                    "无法创建备份文件 {}，拒绝覆盖原文件: {}",
+                    backup_path.display(),
+                    e
+                ))
+            })?;
+            let backup_path_str = Some(backup_path.to_string_lossy().to_string());
             (file_path.to_string(), backup_path_str)
         }
     };
@@ -177,11 +181,6 @@ pub fn apply_self_review_fixes(
     docx.build()
         .pack(file)
         .map_err(|e| AppError::Io(format!("docx 打包失败: {:?}", e)))?;
-
-    // Overwrite 模式：如果备份失败，回退到 Copy 模式
-    if mode == FixMode::Overwrite && backup_path_str.is_none() {
-        // 已经覆盖了原文件，但备份失败。返回结果但标注无备份
-    }
 
     Ok(FixResult {
         mode,
@@ -363,6 +362,51 @@ mod tests {
         assert!(err.contains("没有可自动修复的项"), "错误消息应提示无修复项");
     }
 
+
+    #[test]
+    fn test_apply_overwrite_mode_backup_fails() {
+        let path = "/tmp/test_apply_overwrite_fail.docx";
+        create_test_docx(path, "第一段,有逗号。");
+
+        // 创建一个与备份路径同名的目录，使 std::fs::copy 失败
+        let backup_dir = "/tmp/test_apply_overwrite_fail.bak";
+        std::fs::create_dir_all(backup_dir).unwrap();
+
+        let issues = vec![make_issue(0, ",", "，", true)];
+        let result = apply_self_review_fixes(path, &issues, FixMode::Overwrite);
+
+        // 应返回 Err，拒绝覆盖
+        assert!(result.is_err(), "备份失败时应返回错误");
+        let err = format!("{}", result.unwrap_err());
+        assert!(
+            err.contains("无法创建备份文件") && err.contains("拒绝覆盖原文件"),
+            "错误信息应提示备份失败并拒绝覆盖: {}",
+            err
+        );
+
+        // 原文件内容应保持不变
+        let bytes = std::fs::read(path).unwrap();
+        let docx = docx_rs::read_docx(&bytes).unwrap();
+        let mut text = String::new();
+        for child in &docx.document.children {
+            if let docx_rs::DocumentChild::Paragraph(p) = child {
+                for para_child in &p.children {
+                    if let docx_rs::ParagraphChild::Run(r) = para_child {
+                        for run_child in &r.children {
+                            if let docx_rs::RunChild::Text(t) = run_child {
+                                text.push_str(&t.text);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(text.contains(","), "原文件不应被覆盖");
+
+        // 清理
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(backup_dir).unwrap();
+    }
     #[test]
     fn test_apply_doc_not_supported() {
         let result = apply_self_review_fixes("test.doc", &[], FixMode::Copy);
