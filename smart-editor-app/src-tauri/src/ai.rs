@@ -275,8 +275,8 @@ fn build_context_logic_prompt(text: &str) -> String {
     )
 }
 
-fn extract_json_array(text: &str) -> Result<&str> {
-    if let Some(start) = text.find('[') {
+fn extract_braced_content(text: &str, open: char, close: char) -> Result<&str> {
+    if let Some(start) = text.find(open) {
         let mut depth = 0;
         let mut in_string = false;
         let mut escape = false;
@@ -297,8 +297,8 @@ fn extract_json_array(text: &str) -> Result<&str> {
                 continue;
             }
             match ch {
-                '[' => depth += 1,
-                ']' => {
+                c if c == open => depth += 1,
+                c if c == close => {
                     depth -= 1;
                     if depth == 0 {
                         return Ok(&text[start..start + i + ch.len_utf8()]);
@@ -308,7 +308,15 @@ fn extract_json_array(text: &str) -> Result<&str> {
             }
         }
     }
-    Err(AppError::Parse("AI 返回中未找到 JSON 数组".to_string()))
+    Err(AppError::Parse(format!(
+        "AI 返回中未找到匹配的 {}...{} 内容",
+        open, close
+    )))
+}
+
+fn extract_json_array(text: &str) -> Result<&str> {
+    extract_braced_content(text, '[', ']')
+        .map_err(|_| AppError::Parse("AI 返回中未找到 JSON 数组".to_string()))
 }
 
 fn build_tech_prompt(text: &str) -> String {
@@ -419,39 +427,8 @@ fn build_business_draft_prompt(requirements: &str, references: &[String]) -> Str
 }
 
 fn extract_json(text: &str) -> Result<&str> {
-    if let Some(start) = text.find('{') {
-        let mut depth = 0;
-        let mut in_string = false;
-        let mut escape = false;
-        for (i, ch) in text[start..].char_indices() {
-            if escape {
-                escape = false;
-                continue;
-            }
-            if ch == '\\' && in_string {
-                escape = true;
-                continue;
-            }
-            if ch == '"' {
-                in_string = !in_string;
-                continue;
-            }
-            if in_string {
-                continue;
-            }
-            match ch {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return Ok(&text[start..start + i + ch.len_utf8()]);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    Err(AppError::Parse("AI 返回中未找到 JSON 内容".to_string()))
+    extract_braced_content(text, '{', '}')
+        .map_err(|_| AppError::Parse("AI 返回中未找到 JSON 内容".to_string()))
 }
 
 fn validate_requirements(parsed: &crate::models::ParsedRequirements) -> Result<()> {

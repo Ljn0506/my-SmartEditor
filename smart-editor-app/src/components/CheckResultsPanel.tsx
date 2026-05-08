@@ -106,14 +106,10 @@ export default function CheckResultsPanel({
   const canRunCheck = hasRequirements && requirements.some((r) => r.checked);
 
   // 分类自查问题
-  const { consistencyIssues, qualityIssues, formatIssues } = useMemo(() => {
-    const issues = selfReviewReport?.issues || [];
-    return {
-      consistencyIssues: issues.filter((i) => i.category === "consistency"),
-      qualityIssues: issues.filter((i) => i.category === "quality"),
-      formatIssues: issues.filter((i) => i.category === "format"),
-    };
-  }, [selfReviewReport]);
+  const issues = selfReviewReport?.issues || [];
+  const consistencyIssues = issues.filter((i) => i.category === "consistency");
+  const qualityIssues = issues.filter((i) => i.category === "quality");
+  const formatIssues = issues.filter((i) => i.category === "format");
 
   return (
     <div className="flex-1 flex flex-col min-h-0">

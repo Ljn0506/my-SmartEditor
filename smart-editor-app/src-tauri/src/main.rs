@@ -381,15 +381,19 @@ fn detect_document_type(file_name: String) -> DocumentType {
     nas_scanner::detect_document_type(&file_name)
 }
 
+async fn spawn_blocking_cmd<T, F>(f: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    tokio::task::spawn_blocking(f).await.map_err(|e| e.to_string())
+}
+
 // --- 偏离检查命令 ---
 
 #[tauri::command]
 async fn check_deviation(bid_text: String, req_text: String) -> Result<DeviationReport, String> {
-    tokio::task::spawn_blocking(move || {
-        deviation::check_deviation(&bid_text, &req_text)
-    })
-    .await
-    .map_err(|e| e.to_string())
+    spawn_blocking_cmd(move || deviation::check_deviation(&bid_text, &req_text)).await
 }
 
 #[tauri::command]
@@ -408,11 +412,7 @@ async fn check_deviation_items(
     req_items: Vec<crate::models::RequirementItem>,
     bid_text: String,
 ) -> Result<DeviationReport, String> {
-    tokio::task::spawn_blocking(move || {
-        deviation::check_deviation_items(&req_items, &bid_text)
-    })
-    .await
-    .map_err(|e| e.to_string())
+    spawn_blocking_cmd(move || deviation::check_deviation_items(&req_items, &bid_text)).await
 }
 
 // --- 脱敏命令 ---
@@ -443,9 +443,7 @@ fn write_clipboard_text(text: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn check_fatal_risks_text(text: String) -> Result<Vec<crate::models::FatalRisk>, String> {
-    tokio::task::spawn_blocking(move || deviation::check_fatal_risks(&text))
-        .await
-        .map_err(|e| e.to_string())
+    spawn_blocking_cmd(move || deviation::check_fatal_risks(&text)).await
 }
 
 #[tauri::command]
@@ -465,16 +463,12 @@ fn export_deviation_report_json(report: crate::models::DeviationReport) -> Strin
 
 #[tauri::command]
 async fn check_punctuation(text: String) -> Result<Vec<punctuation::PunctuationIssue>, String> {
-    tokio::task::spawn_blocking(move || punctuation::check_punctuation(&text))
-        .await
-        .map_err(|e| e.to_string())
+    spawn_blocking_cmd(move || punctuation::check_punctuation(&text)).await
 }
 
 #[tauri::command]
 async fn check_self_review(text: String) -> Result<SelfReviewReport, String> {
-    tokio::task::spawn_blocking(move || self_review::check_self_review(&text))
-        .await
-        .map_err(|e| e.to_string())
+    spawn_blocking_cmd(move || self_review::check_self_review(&text)).await
 }
 
 /// T5: 完整的投标文件自查（本地 + AI）

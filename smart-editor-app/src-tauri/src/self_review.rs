@@ -59,7 +59,7 @@ static PLACEHOLDER_PATTERNS: Lazy<Vec<(&'static str, Regex, &'static str, Severi
 
 /// 预计算段落位置映射，避免 O(N²) 扫描
 struct ParagraphMap {
-    byte_ranges: Vec<(usize, usize, usize)>, // (start, end, paragraph_index)
+    byte_ranges: Vec<(usize, usize, usize)>,
     char_ranges: Vec<(usize, usize, usize)>,
 }
 
@@ -72,7 +72,7 @@ impl ParagraphMap {
         let mut idx = 0usize;
 
         for line in text.lines() {
-            let line_byte_len = line.len() + 1; // +1 for '\n'
+            let line_byte_len = line.len() + 1;
             let char_count = line.chars().count();
             let line_char_len = char_count + 1;
             if !line.trim().is_empty() {

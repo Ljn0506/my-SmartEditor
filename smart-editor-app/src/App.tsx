@@ -646,17 +646,17 @@ function CheckTabFullScreen() {
           {bidParagraphs.map((p) => {
             const isHighlighted = highlightedIdx === p.index;
             const isModified = modifiedIdxs.includes(p.index);
+            const paraClass =
+              isHighlighted
+                ? "bg-yellow-50 border-yellow-300"
+                : isModified
+                ? "bg-emerald-50 border-emerald-300"
+                : "border-transparent hover:bg-gray-50";
             return (
               <div
                 key={p.index}
                 data-paragraph-index={p.index}
-                className={`p-3 rounded border transition-colors duration-300 ${
-                  isHighlighted
-                    ? "bg-yellow-50 border-yellow-300"
-                    : isModified
-                    ? "bg-emerald-50 border-emerald-300"
-                    : "border-transparent hover:bg-gray-50"
-                }`}
+                className={`p-3 rounded border transition-colors duration-300 ${paraClass}`}
               >
                 <div className="text-xs text-gray-400 mb-1">第 {p.index + 1} 段</div>
                 <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{p.text}</p>

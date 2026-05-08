@@ -54,38 +54,24 @@ pub fn apply_self_review_fixes(
 
     for child in &mut docx.document.children {
         match child {
-            docx_rs::DocumentChild::Paragraph(p) => {
-                let has_text = p.children.iter().any(|pc| {
-                    if let docx_rs::ParagraphChild::Run(r) = pc {
-                        r.children
-                            .iter()
-                            .any(|rc| matches!(rc, docx_rs::RunChild::Text(_)))
-                    } else {
-                        false
-                    }
-                });
-
-                if has_text {
-                    if let Some(fixes) = fixes_by_para.get(&para_idx) {
-                        let para_text_before = crate::parser::extract_paragraph_text_to_string(p);
-                        apply_fixes_to_paragraph(p, fixes);
-                        let para_text_after = crate::parser::extract_paragraph_text_to_string(p);
-                        // 记录修改明细
+            docx_rs::DocumentChild::Paragraph(p) if paragraph_has_text(p) => {
+                if let Some(fixes) = fixes_by_para.get(&para_idx) {
+                    let para_text_before = crate::parser::extract_paragraph_text_to_string(p);
+                    apply_fixes_to_paragraph(p, fixes);
+                    let para_text_after = crate::parser::extract_paragraph_text_to_string(p);
+                    if para_text_before != para_text_after {
                         for (orig, sugg, category) in fixes {
-                            if para_text_before != para_text_after || para_text_before.contains(orig)
-                            {
-                                changes.push(ParagraphChange {
-                                    paragraph_index: para_idx,
-                                    paragraph_text: para_text_before.clone(),
-                                    original: orig.clone(),
-                                    modified: sugg.clone(),
-                                    issue_category: category.clone(),
-                                });
-                            }
+                            changes.push(ParagraphChange {
+                                paragraph_index: para_idx,
+                                paragraph_text: para_text_before.clone(),
+                                original: orig.clone(),
+                                modified: sugg.clone(),
+                                issue_category: category.clone(),
+                            });
                         }
                     }
-                    para_idx += 1;
                 }
+                para_idx += 1;
             }
             docx_rs::DocumentChild::Table(t) => {
                 for row_child in &mut t.rows {
@@ -94,15 +80,7 @@ pub fn apply_self_review_fixes(
                         let docx_rs::TableRowChild::TableCell(cell) = cc;
                         cell.children.iter().any(|c| {
                             if let docx_rs::TableCellContent::Paragraph(p) = c {
-                                p.children.iter().any(|pc| {
-                                    if let docx_rs::ParagraphChild::Run(r) = pc {
-                                        r.children.iter().any(|rc| {
-                                            matches!(rc, docx_rs::RunChild::Text(_))
-                                        })
-                                    } else {
-                                        false
-                                    }
-                                })
+                                paragraph_has_text(p)
                             } else {
                                 false
                             }
@@ -187,6 +165,16 @@ pub fn apply_self_review_fixes(
         output_path: output_path_str,
         backup_path: backup_path_str,
         changes,
+    })
+}
+
+fn paragraph_has_text(p: &docx_rs::Paragraph) -> bool {
+    p.children.iter().any(|pc| {
+        if let docx_rs::ParagraphChild::Run(r) = pc {
+            r.children.iter().any(|rc| matches!(rc, docx_rs::RunChild::Text(_)))
+        } else {
+            false
+        }
     })
 }
 
