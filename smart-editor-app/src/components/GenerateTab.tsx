@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Sparkles,
@@ -40,6 +40,19 @@ export interface Card {
   generated_by: string;
   related_cards: string[];
   param_placeholders?: ParamPlaceholder[];
+  risk_flags?: string[];
+}
+
+export interface GlobalParams {
+  project_name: string;
+  client_name: string;
+  contract_amount?: string;
+  delivery_days?: number;
+  warranty_years?: number;
+  response_time?: string;
+  project_manager?: string;
+  qps?: number;
+  concurrent_users?: number;
 }
 
 export interface GenerateTabProps {
@@ -51,6 +64,10 @@ export default function GenerateTab({ onNavigateToCheck }: GenerateTabProps) {
   const [docTarget, setDocTarget] = useState<"technical" | "business">("technical");
   const [outlines, setOutlines] = useState<CardOutline[]>([]);
   const [cards, setCards] = useState<Card[]>([]);
+  const [cardCache, setCardCache] = useState<Record<string, Card[]>>({
+    technical: [],
+    business: [],
+  });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [generatingOutline, setGeneratingOutline] = useState(false);
   const [generatingCardId, setGeneratingCardId] = useState<string | null>(null);
@@ -60,9 +77,59 @@ export default function GenerateTab({ onNavigateToCheck }: GenerateTabProps) {
   const [consistencyReport, setConsistencyReport] = useState<any>(null);
   const [checkingConsistency, setCheckingConsistency] = useState(false);
   const [showConsistency, setShowConsistency] = useState(false);
+  const [globalParams, setGlobalParams] = useState<GlobalParams | null>(null);
+  const [showGlobalParams, setShowGlobalParams] = useState(false);
+  const [checkingCrossDoc, setCheckingCrossDoc] = useState(false);
 
   const hasRequirements = requirements.length > 0 && parsedText.length > 0;
   const selectedCard = cards.find((c) => c.id === selectedId);
+
+  const getDocType = (target: string) =>
+    target === "technical" ? "Technical" : "Business";
+  const syncCache = (nextCards: Card[]) => {
+    setCardCache((prev) => ({ ...prev, [docTarget]: nextCards }));
+  };
+
+  const prevDocTargetRef = useRef(docTarget);
+  const cardsRef = useRef(cards);
+  cardsRef.current = cards;
+  const cardCacheRef = useRef(cardCache);
+  cardCacheRef.current = cardCache;
+
+  // 加载全局参数
+  useEffect(() => {
+    invoke<GlobalParams | null>("get_global_params")
+      .then(setGlobalParams)
+      .catch(() => setGlobalParams(null));
+  }, []);
+
+  // 切换文档目标时保存当前卡片并加载目标卡片
+  useEffect(() => {
+    const saveCurrentAndSwitch = async () => {
+      const prev = prevDocTargetRef.current;
+      // 保存上一个 docTarget 的 cards 到缓存（避免闭包 stale）
+      setCardCache((prevCache) => ({ ...prevCache, [prev]: cardsRef.current }));
+      // 加载新 docTarget 的缓存（通过 ref 获取最新值）
+      const targetCache = cardCacheRef.current[docTarget] || [];
+      if (targetCache.length > 0) {
+        setCards(targetCache);
+        setSelectedId(targetCache[0]?.id || null);
+      } else {
+        try {
+          const loaded: Card[] = await invoke("get_cards", { documentTarget: docTarget });
+          setCards(loaded);
+          setSelectedId(loaded[0]?.id || null);
+          setCardCache((prevCache) => ({ ...prevCache, [docTarget]: loaded }));
+        } catch {
+          setCards([]);
+          setSelectedId(null);
+        }
+      }
+      prevDocTargetRef.current = docTarget;
+    };
+    saveCurrentAndSwitch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docTarget]);
 
   // 当选中卡片变化时，同步编辑内容
   useEffect(() => {
@@ -80,7 +147,7 @@ export default function GenerateTab({ onNavigateToCheck }: GenerateTabProps) {
     try {
       const result: CardOutline[] = await invoke("generate_outline", {
         requirementsText: parsedText,
-        docType: docTarget === "technical" ? "Technical" : "Business",
+        docType: getDocType(docTarget),
       });
       setOutlines(result);
       // 初始化为空卡片（仅大纲）
@@ -99,6 +166,7 @@ export default function GenerateTab({ onNavigateToCheck }: GenerateTabProps) {
         documentTarget: docTarget,
         cards: emptyCards,
       });
+      syncCache(emptyCards);
     } catch (e: any) {
       setError(`生成大纲失败: ${String(e)}`);
     } finally {
@@ -115,15 +183,15 @@ export default function GenerateTab({ onNavigateToCheck }: GenerateTabProps) {
         outline,
         requirementsText: parsedText,
         references: [],
-        docType: docTarget === "technical" ? "Technical" : "Business",
+        docType: getDocType(docTarget),
+        globalParams,
       });
-      setCards((prev) =>
-        prev.map((c) => (c.id === card.id ? card : c))
-      );
-      // 同步更新后端
+      const nextCards = cards.map((c) => (c.id === card.id ? card : c));
+      setCards(nextCards);
+      syncCache(nextCards);
       await invoke("save_cards", {
         documentTarget: docTarget,
-        cards: cards.map((c) => (c.id === card.id ? card : c)),
+        cards: nextCards,
       });
     } catch (e: any) {
       setError(`生成内容失败: ${String(e)}`);
@@ -143,7 +211,8 @@ export default function GenerateTab({ onNavigateToCheck }: GenerateTabProps) {
           outline,
           requirementsText: parsedText,
           references: [],
-          docType: docTarget === "technical" ? "Technical" : "Business",
+          docType: getDocType(docTarget),
+          globalParams,
         });
         updatedCards = updatedCards.map((c) => (c.id === card.id ? card : c));
         setCards(updatedCards);
@@ -152,6 +221,7 @@ export default function GenerateTab({ onNavigateToCheck }: GenerateTabProps) {
         documentTarget: docTarget,
         cards: updatedCards,
       });
+      syncCache(updatedCards);
     } catch (e: any) {
       setError(`批量生成失败: ${String(e)}`);
     } finally {
@@ -164,6 +234,7 @@ export default function GenerateTab({ onNavigateToCheck }: GenerateTabProps) {
     const updated: Card = { ...selectedCard, content: editContent };
     const next = cards.map((c) => (c.id === updated.id ? updated : c));
     setCards(next);
+    syncCache(next);
     try {
       await invoke("save_cards", {
         documentTarget: docTarget,
@@ -178,6 +249,7 @@ export default function GenerateTab({ onNavigateToCheck }: GenerateTabProps) {
     const updated: Card = { ...card, status: "confirmed" };
     const next = cards.map((c) => (c.id === updated.id ? updated : c));
     setCards(next);
+    syncCache(next);
     try {
       await invoke("save_cards", {
         documentTarget: docTarget,
@@ -205,10 +277,12 @@ export default function GenerateTab({ onNavigateToCheck }: GenerateTabProps) {
         outline,
         requirementsText: parsedText,
         references: [],
-        docType: docTarget === "technical" ? "Technical" : "Business",
+        docType: getDocType(docTarget),
+        globalParams,
       });
       const next = cards.map((c) => (c.id === card.id ? card : c));
       setCards(next);
+      syncCache(next);
       setEditContent(card.content);
       await invoke("save_cards", {
         documentTarget: docTarget,
@@ -237,14 +311,55 @@ export default function GenerateTab({ onNavigateToCheck }: GenerateTabProps) {
   };
 
   const handleConfirmAll = async () => {
+    if (docTarget === "business") {
+      alert("商务卡片涉及敏感条款，必须逐张审核，不支持一键确认");
+      return;
+    }
     try {
       await invoke("confirm_all_cards", { documentTarget: docTarget });
       const next = cards.map((c) =>
         c.status === "draft" ? { ...c, status: "confirmed" as const } : c
       );
       setCards(next);
+      syncCache(next);
     } catch (e: any) {
       setError(`一键确认失败: ${String(e)}`);
+    }
+  };
+
+  const handleCheckCrossDocConsistency = async () => {
+    if (!globalParams) {
+      setError("请先配置全局参数");
+      return;
+    }
+    if (cardCache.technical.length === 0 || cardCache.business.length === 0) {
+      setError("需要同时生成技术方案和商务响应的卡片才能进行跨文档检查");
+      return;
+    }
+    setCheckingCrossDoc(true);
+    setError(null);
+    try {
+      const report = await invoke("check_cross_document_consistency", {
+        globalParams,
+        technicalCards: cardCache.technical,
+        businessCards: cardCache.business,
+      });
+      setConsistencyReport(report);
+      setShowConsistency(true);
+    } catch (e: any) {
+      setError(`跨文档一致性检查失败: ${String(e)}`);
+    } finally {
+      setCheckingCrossDoc(false);
+    }
+  };
+
+  const handleSaveGlobalParams = async (params: GlobalParams) => {
+    try {
+      await invoke("save_global_params", { params });
+      setGlobalParams(params);
+      setShowGlobalParams(false);
+    } catch (e: any) {
+      setError(`保存全局参数失败: ${String(e)}`);
     }
   };
 
@@ -302,6 +417,25 @@ export default function GenerateTab({ onNavigateToCheck }: GenerateTabProps) {
               }`}
             >
               商务响应
+            </button>
+          </div>
+
+          {/* 全局参数快捷入口 */}
+          <div className="flex items-center justify-between mb-3">
+            <button
+              onClick={() => setShowGlobalParams(true)}
+              className="text-xs px-2 py-1 rounded bg-purple-50 text-purple-600 hover:bg-purple-100 flex items-center gap-1"
+            >
+              <span>⚙️</span>
+              {globalParams ? "全局参数已配置" : "配置全局参数"}
+            </button>
+            <button
+              onClick={handleCheckCrossDocConsistency}
+              disabled={checkingCrossDoc || !globalParams || cardCache.technical.length === 0 || cardCache.business.length === 0}
+              className="text-xs px-2 py-1 rounded bg-indigo-50 text-indigo-600 hover:bg-indigo-100 disabled:bg-gray-100 disabled:text-gray-400 flex items-center gap-1"
+            >
+              {checkingCrossDoc ? <Loader2 size={12} className="animate-spin" /> : <SearchCheck size={12} />}
+              跨文档检查
             </button>
           </div>
 
@@ -368,6 +502,18 @@ export default function GenerateTab({ onNavigateToCheck }: GenerateTabProps) {
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-50 text-red-600 font-medium shrink-0">
                           素材不足
                         </span>
+                      )}
+                      {card.risk_flags && card.risk_flags.length > 0 && (
+                        <div className="flex gap-1 shrink-0">
+                          {card.risk_flags.map((flag) => (
+                            <span
+                              key={flag}
+                              className="text-[10px] px-1.5 py-0.5 rounded bg-orange-50 text-orange-600 font-medium"
+                            >
+                              {flag}
+                            </span>
+                          ))}
+                        </div>
                       )}
                     </div>
                     <div className="flex items-center gap-2 mb-1">
@@ -596,12 +742,115 @@ export default function GenerateTab({ onNavigateToCheck }: GenerateTabProps) {
         </div>
       )}
 
+      {/* 全局参数配置弹窗 */}
+      {showGlobalParams && (
+        <GlobalParamsModal
+          initial={globalParams}
+          onSave={handleSaveGlobalParams}
+          onClose={() => setShowGlobalParams(false)}
+        />
+      )}
+
       {/* 错误提示 */}
       {error && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg bg-red-600 text-white text-sm shadow-lg z-50">
           {error}
         </div>
       )}
+    </div>
+  );
+}
+
+function GlobalParamsModal({
+  initial,
+  onSave,
+  onClose,
+}: {
+  initial: GlobalParams | null;
+  onSave: (params: GlobalParams) => void;
+  onClose: () => void;
+}) {
+  const [form, setForm] = useState<GlobalParams>(
+    initial || {
+      project_name: "",
+      client_name: "",
+      contract_amount: "",
+      delivery_days: undefined,
+      warranty_years: undefined,
+      response_time: "",
+      project_manager: "",
+      qps: undefined,
+      concurrent_users: undefined,
+    }
+  );
+
+  const update = (key: keyof GlobalParams, value: string | number | undefined) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+      <div className="bg-white rounded-xl p-6 w-[480px] max-h-[85vh] overflow-auto shadow-xl">
+        <h3 className="text-base font-semibold mb-4">全局参数配置</h3>
+        <p className="text-xs text-gray-500 mb-4">
+          填写后 AI 生成时会直接使用已知参数值，减少 [PARAM:xxx] 占位符。
+        </p>
+        <div className="space-y-3">
+          {[
+            { key: "project_name" as const, label: "项目名称", type: "text", required: true },
+            { key: "client_name" as const, label: "客户名称", type: "text", required: true },
+            { key: "contract_amount" as const, label: "合同金额（元）", type: "text" },
+            { key: "delivery_days" as const, label: "交付工期（天）", type: "number" },
+            { key: "warranty_years" as const, label: "维保年限（年）", type: "number" },
+            { key: "response_time" as const, label: "响应时间", type: "text" },
+            { key: "project_manager" as const, label: "项目经理", type: "text" },
+            { key: "qps" as const, label: "QPS", type: "number" },
+            { key: "concurrent_users" as const, label: "并发用户数", type: "number" },
+          ].map((field) => (
+            <div key={field.key}>
+              <label className="block text-xs font-medium text-gray-700 mb-1">
+                {field.label}
+                {field.required && <span className="text-red-500">*</span>}
+              </label>
+              <input
+                type={field.type}
+                value={form[field.key] ?? ""}
+                onChange={(e) => {
+                  const val =
+                    field.type === "number"
+                      ? e.target.value === ""
+                        ? undefined
+                        : parseInt(e.target.value, 10)
+                      : e.target.value;
+                  update(field.key, val);
+                }}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-200"
+                placeholder={`请输入${field.label}`}
+              />
+            </div>
+          ))}
+        </div>
+        <div className="flex justify-end gap-2 mt-6">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-100"
+          >
+            取消
+          </button>
+          <button
+            onClick={() => {
+              if (!form.project_name.trim() || !form.client_name.trim()) {
+                alert("项目名称和客户名称为必填项");
+                return;
+              }
+              onSave(form);
+            }}
+            className="px-4 py-2 rounded-lg text-sm bg-blue-600 text-white hover:bg-blue-700"
+          >
+            保存
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
