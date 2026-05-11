@@ -523,6 +523,7 @@ pub struct Card {
     pub generated_by: String,
     pub related_cards: Vec<String>,
     pub param_placeholders: Vec<ParamPlaceholder>,
+    pub risk_flags: Vec<String>,
 }
 
 /// 一致性检查问题项
@@ -541,3 +542,20 @@ pub struct ConsistencyReport {
     pub total_checked: usize,
     pub issues: Vec<ConsistencyIssue>,
 }
+
+// ========== Phase 3: 全局参数表 + 跨文档一致性 ==========
+
+/// 全局参数表（跨文档一致性核心）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GlobalParams {
+    pub project_name: String,
+    pub client_name: String,
+    pub contract_amount: Option<String>,
+    pub delivery_days: Option<i32>,
+    pub warranty_years: Option<i32>,
+    pub response_time: Option<String>,
+    pub project_manager: Option<String>,
+    pub qps: Option<i32>,
+    pub concurrent_users: Option<i32>,
+}
+

@@ -49,6 +49,7 @@ impl Database {
                 generated_by TEXT NOT NULL DEFAULT 'ai',
                 related_cards TEXT NOT NULL DEFAULT '[]',
                 param_placeholders TEXT NOT NULL DEFAULT '[]',
+                risk_flags TEXT NOT NULL DEFAULT '[]',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )",
@@ -62,6 +63,17 @@ impl Database {
             "ALTER TABLE cards ADD COLUMN IF NOT EXISTS param_placeholders TEXT NOT NULL DEFAULT '[]'",
             [],
         ).ok();
+        self.conn.execute(
+            "ALTER TABLE cards ADD COLUMN IF NOT EXISTS risk_flags TEXT NOT NULL DEFAULT '[]'",
+            [],
+        ).ok();
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS global_params (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )",
+            [],
+        )?;
         for stmt in [
             "CREATE INDEX IF NOT EXISTS idx_templates_doc_attr ON templates(doc_attr)",
             "CREATE INDEX IF NOT EXISTS idx_templates_business_domain ON templates(business_domain)",
@@ -233,18 +245,28 @@ impl Database {
 
     pub fn save_cards(&self, document_target: &str, cards: &[crate::models::Card]) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
-        // 先删除该文档目标下的旧卡片
-        tx.execute("DELETE FROM cards WHERE document_target = ?1", [document_target])?;
-        // 批量插入
+        // UPSERT：先插入/替换，再删除不在列表中的旧卡片，避免 DELETE 后崩溃导致数据丢失
         for card in cards {
             let source_refs_json = serde_json::to_string(&card.source_refs)?;
             let related_json = serde_json::to_string(&card.related_cards)?;
             let param_json = serde_json::to_string(&card.param_placeholders)?;
+            let risk_json = serde_json::to_string(&card.risk_flags)?;
             tx.execute(
                 "INSERT INTO cards (
                     id, chapter, title, content, source_refs, document_target,
-                    status, generated_by, related_cards, param_placeholders
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    status, generated_by, related_cards, param_placeholders, risk_flags
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                ON CONFLICT(id) DO UPDATE SET
+                    chapter = excluded.chapter,
+                    title = excluded.title,
+                    content = excluded.content,
+                    source_refs = excluded.source_refs,
+                    document_target = excluded.document_target,
+                    status = excluded.status,
+                    generated_by = excluded.generated_by,
+                    related_cards = excluded.related_cards,
+                    param_placeholders = excluded.param_placeholders,
+                    risk_flags = excluded.risk_flags",
                 params![
                     card.id,
                     card.chapter,
@@ -256,8 +278,26 @@ impl Database {
                     card.generated_by,
                     related_json,
                     param_json,
+                    risk_json,
                 ],
             )?;
+        }
+        // 清理不在新列表中的旧卡片
+        if cards.is_empty() {
+            tx.execute("DELETE FROM cards WHERE document_target = ?1", [document_target])?;
+        } else {
+            let ids: Vec<&str> = cards.iter().map(|c| c.id.as_str()).collect();
+            let placeholders = (0..ids.len()).map(|_| "?").collect::<Vec<_>>().join(",");
+            let sql = format!(
+                "DELETE FROM cards WHERE document_target = ?1 AND id NOT IN ({})",
+                placeholders
+            );
+            let mut stmt = tx.prepare(&sql)?;
+            let mut params: Vec<&dyn rusqlite::ToSql> = vec![&document_target];
+            for id in &ids {
+                params.push(id);
+            }
+            stmt.execute(rusqlite::params_from_iter(params))?;
         }
         tx.commit()?;
         Ok(())
@@ -266,7 +306,7 @@ impl Database {
     pub fn get_cards(&self, document_target: &str) -> Result<Vec<crate::models::Card>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, chapter, title, content, source_refs, document_target,
-                    status, generated_by, related_cards, param_placeholders
+                    status, generated_by, related_cards, param_placeholders, risk_flags
              FROM cards WHERE document_target = ?1 ORDER BY chapter"
         )?;
         let rows = stmt.query_map([document_target], |row| {
@@ -274,6 +314,7 @@ impl Database {
             let related_str: String = row.get(8)?;
             let status_str: String = row.get(6)?;
             let param_str: String = row.get(9)?;
+            let risk_str: String = row.get(10)?;
             Ok(crate::models::Card {
                 id: row.get(0)?,
                 chapter: row.get(1)?,
@@ -286,6 +327,7 @@ impl Database {
                 generated_by: row.get(7)?,
                 related_cards: serde_json::from_str(&related_str).unwrap_or_default(),
                 param_placeholders: serde_json::from_str(&param_str).unwrap_or_default(),
+                risk_flags: serde_json::from_str(&risk_str).unwrap_or_default(),
             })
         })?;
         let mut cards = Vec::new();
@@ -299,6 +341,7 @@ impl Database {
         let source_refs_json = serde_json::to_string(&card.source_refs)?;
         let related_json = serde_json::to_string(&card.related_cards)?;
         let param_json = serde_json::to_string(&card.param_placeholders)?;
+        let risk_json = serde_json::to_string(&card.risk_flags)?;
         let rows = self.conn.execute(
             "UPDATE cards SET
                 chapter = ?1,
@@ -310,8 +353,9 @@ impl Database {
                 generated_by = ?7,
                 related_cards = ?8,
                 param_placeholders = ?9,
+                risk_flags = ?10,
                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?10",
+             WHERE id = ?11",
             params![
                 card.chapter,
                 card.title,
@@ -322,6 +366,7 @@ impl Database {
                 card.generated_by,
                 related_json,
                 param_json,
+                risk_json,
                 card.id,
             ],
         )?;
@@ -329,6 +374,36 @@ impl Database {
             return Err(AppError::Validation(format!("卡片 {} 不存在", card.id)));
         }
         Ok(())
+    }
+
+    // --- Phase 3: 全局参数表 ---
+
+    pub fn save_global_params(&self, params: &crate::models::GlobalParams) -> Result<()> {
+        let value = serde_json::to_string(params)?;
+        self.conn.execute(
+            "INSERT INTO global_params (key, value) VALUES ('default', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [value],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_global_params(&self) -> Result<Option<crate::models::GlobalParams>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT value FROM global_params WHERE key = 'default'"
+        )?;
+        let result = stmt.query_row([], |row| {
+            let value: String = row.get(0)?;
+            Ok(value)
+        }).optional()?;
+        match result {
+            Some(value) => {
+                let params = serde_json::from_str(&value)
+                    .map_err(|e| AppError::Database(format!("全局参数解析失败: {}", e)))?;
+                Ok(Some(params))
+            }
+            None => Ok(None),
+        }
     }
 }
 
