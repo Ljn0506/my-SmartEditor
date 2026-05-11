@@ -19,7 +19,7 @@ import CheckResultsPanel, {
 } from "./components/CheckResultsPanel";
 
 
-import { useRequirements } from "./contexts/RequirementsContext";
+import { useRequirements, type RequirementItem } from "./contexts/RequirementsContext";
 
 // 标签页类型
 type TabKey = "upload" | "generate" | "check" | "settings";
