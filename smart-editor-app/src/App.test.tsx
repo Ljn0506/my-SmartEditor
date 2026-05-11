@@ -15,21 +15,16 @@ describe("App", () => {
   it("renders all tabs", () => {
     render(<App />);
     expect(screen.getByText("需求上传")).toBeInTheDocument();
-    expect(screen.getByText("模板库")).toBeInTheDocument();
-    expect(screen.getByText("智能推送")).toBeInTheDocument();
+    expect(screen.getByText("智能生成")).toBeInTheDocument();
     expect(screen.getByText("校对")).toBeInTheDocument();
     expect(screen.getByText("设置")).toBeInTheDocument();
   });
 
-  it("switches to library tab when clicked", async () => {
+  it("switches to generate tab when clicked", async () => {
     render(<App />);
-    const libraryTab = screen.getByText("模板库");
-    fireEvent.click(libraryTab);
-    expect(screen.getByPlaceholderText("搜索标题、内容、标签...")).toBeInTheDocument();
-    // 等待 LibraryTab 异步 effect 完成，消除 act 警告
-    await waitFor(() => {
-      expect(screen.getByText("暂无模板，请调整筛选条件或搜索关键词")).toBeInTheDocument();
-    });
+    const generateTab = screen.getByText("智能生成");
+    fireEvent.click(generateTab);
+    expect(screen.getByRole("button", { name: /生成章节大纲/ })).toBeInTheDocument();
   });
 
   it("switches to settings tab when clicked", async () => {

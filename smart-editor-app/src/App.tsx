@@ -4,7 +4,6 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   Upload,
-  Library,
   Sparkles,
   SearchCheck,
   Settings,
@@ -12,7 +11,6 @@ import {
   ClipboardCopy,
 } from "lucide-react";
 import TiptapEditor from "./components/TiptapEditor";
-import LibraryTab from "./components/LibraryTab";
 import GenerateTab from "./components/GenerateTab";
 import { RequirementsProvider } from "./contexts/RequirementsContext";
 import CheckResultsPanel, {
@@ -24,12 +22,11 @@ import CheckResultsPanel, {
 import { useRequirements } from "./contexts/RequirementsContext";
 
 // 标签页类型
-type TabKey = "upload" | "library" | "push" | "check" | "settings";
+type TabKey = "upload" | "generate" | "check" | "settings";
 
 const tabs: { key: TabKey; label: string; icon: React.ReactNode }[] = [
   { key: "upload", label: "需求上传", icon: <Upload size={16} /> },
-  { key: "library", label: "模板库", icon: <Library size={16} /> },
-  { key: "push", label: "智能生成", icon: <Sparkles size={16} /> },
+  { key: "generate", label: "智能生成", icon: <Sparkles size={16} /> },
   { key: "check", label: "校对", icon: <SearchCheck size={16} /> },
   { key: "settings", label: "设置", icon: <Settings size={16} /> },
 ];
@@ -110,8 +107,7 @@ function App() {
             <div className="w-[45%] min-w-[360px] max-w-[560px] flex flex-col border-r border-gray-200 bg-white">
               <div className="flex-1 overflow-auto">
                 {activeTab === "upload" && <UploadTab />}
-                {activeTab === "library" && <LibraryTab editor={editor} />}
-                {activeTab === "push" && <GenerateTab onNavigateToCheck={() => setActiveTab("check")} />}
+                {activeTab === "generate" && <GenerateTab onNavigateToCheck={() => setActiveTab("check")} />}
                 {activeTab === "settings" && <SettingsTab />}
               </div>
             </div>
