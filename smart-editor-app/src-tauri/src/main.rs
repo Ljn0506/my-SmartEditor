@@ -42,7 +42,7 @@ pub struct AppState {
 
 impl AppState {
     fn ai_client(&self) -> Result<AiClient, String> {
-        let guard = self.ai.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = self.ai.lock().map_err(|e| format!("AI 客户端锁定失败: {}", e))?;
         Ok(guard.clone())
     }
 }
@@ -217,7 +217,16 @@ async fn index_templates(
 #[tauri::command]
 fn get_ai_config(state: tauri::State<'_, AppState>) -> Result<AiConfig, String> {
     let app_config = config::load_or_create(&state.config_path).map_err(|e| e.to_string())?;
-    Ok(app_config.to_ai_config())
+    let mut ai = app_config.to_ai_config();
+    // 脱敏：避免 API Key 泄露到前端
+    ai.api_key = ai.api_key.map(|k| {
+        if k.len() > 8 {
+            format!("{}****", &k[..4])
+        } else {
+            "****".to_string()
+        }
+    });
+    Ok(ai)
 }
 
 #[tauri::command]
@@ -228,7 +237,7 @@ fn update_ai_config(state: tauri::State<'_, AppState>, ai: AiConfig) -> Result<(
     app_config.ai_api_key = ai.api_key.clone();
     app_config.ai_model = ai.model.clone();
     config::save(&state.config_path, &app_config).map_err(|e| e.to_string())?;
-    let new_ai = AiClient::new(ai);
+    let new_ai = AiClient::new(ai).map_err(|e| e.to_string())?;
     if let Ok(mut guard) = state.ai.lock() {
         *guard = new_ai;
     }
@@ -567,6 +576,7 @@ async fn generate_card(
     requirements_text: String,
     _references: Vec<String>,
     doc_type: crate::models::DocumentType,
+    global_params: Option<crate::models::GlobalParams>,
 ) -> Result<crate::models::Card, String> {
     // 从知识库搜索相关素材
     let mut refs: Vec<String> = vec![];
@@ -593,8 +603,8 @@ async fn generate_card(
     source_files.dedup();
 
     let ai = state.ai_client().map_err(|e| e.to_string())?;
-    let content = ai
-        .generate_chapter(&outline.title, &outline.chapter, &requirements_text, &refs, doc_type)
+    let (content, risk_flags) = ai
+        .generate_chapter(&outline.title, &outline.chapter, &requirements_text, &refs, doc_type, global_params.as_ref())
         .await
         .map_err(|e| e.to_string())?;
 
@@ -612,6 +622,7 @@ async fn generate_card(
         generated_by: "ai".to_string(),
         related_cards: vec![],
         param_placeholders,
+        risk_flags,
     })
 }
 
@@ -649,6 +660,9 @@ fn confirm_all_cards(
     state: tauri::State<'_, AppState>,
     document_target: String,
 ) -> Result<(), String> {
+    if document_target == "business" {
+        return Err("商务卡片涉及敏感条款，必须逐张审核，不支持一键确认".to_string());
+    }
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let mut cards = db.get_cards(&document_target).map_err(|e| e.to_string())?;
     for card in cards.iter_mut() {
@@ -666,6 +680,36 @@ async fn check_consistency(
 ) -> Result<crate::models::ConsistencyReport, String> {
     let ai = state.ai_client().map_err(|e| e.to_string())?;
     ai.check_consistency(&cards)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_global_params(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<crate::models::GlobalParams>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_global_params().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn save_global_params(
+    state: tauri::State<'_, AppState>,
+    params: crate::models::GlobalParams,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.save_global_params(&params).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn check_cross_document_consistency(
+    state: tauri::State<'_, AppState>,
+    global_params: crate::models::GlobalParams,
+    technical_cards: Vec<crate::models::Card>,
+    business_cards: Vec<crate::models::Card>,
+) -> Result<crate::models::ConsistencyReport, String> {
+    let ai = state.ai_client().map_err(|e| e.to_string())?;
+    ai.check_cross_document_consistency(&global_params, &technical_cards, &business_cards)
         .await
         .map_err(|e| e.to_string())
 }
@@ -704,7 +748,11 @@ fn main() {
                 }
             };
 
-            let ai = AiClient::new(app_config.to_ai_config());
+            let ai = AiClient::new(app_config.to_ai_config()).unwrap_or_else(|e| {
+                log::warn!("AI 客户端初始化失败（URL 校验不通过）: {}，使用默认配置重试", e);
+                let default = config::AppConfig::default();
+                AiClient::new(default.to_ai_config()).expect("默认配置也应能通过 URL 校验")
+            });
 
             app.manage(AppState {
                 db: Arc::new(Mutex::new(db)),
@@ -757,6 +805,9 @@ fn main() {
             update_card,
             confirm_all_cards,
             check_consistency,
+            get_global_params,
+            save_global_params,
+            check_cross_document_consistency,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
