@@ -12,10 +12,7 @@ fn validate_ai_url(url: &str) -> Result<()> {
         .ok_or_else(|| AppError::Validation("API 地址缺少 host".to_string()))?;
     let host_lower = host.to_lowercase();
 
-    // 阻止 localhost
-    if host_lower == "localhost" {
-        return Err(AppError::Validation("不允许使用 localhost 作为 API 地址".to_string()));
-    }
+    // 桌面应用允许 localhost / 127.0.0.1（本地 Ollama 等）
     // 阻止 link-local
     if host_lower.starts_with("169.254.") {
         return Err(AppError::Validation("不允许使用 link-local 地址作为 API 地址".to_string()));

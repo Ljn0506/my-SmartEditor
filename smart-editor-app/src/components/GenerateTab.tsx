@@ -84,8 +84,7 @@ export default function GenerateTab({ onNavigateToCheck }: GenerateTabProps) {
   const hasRequirements = requirements.length > 0 && parsedText.length > 0;
   const selectedCard = cards.find((c) => c.id === selectedId);
 
-  const getDocType = (target: string) =>
-    target === "technical" ? "Technical" : "Business";
+  const getDocType = (target: string) => target;
   const syncCache = (nextCards: Card[]) => {
     setCardCache((prev) => ({ ...prev, [docTarget]: nextCards }));
   };

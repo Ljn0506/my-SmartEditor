@@ -200,17 +200,35 @@ function UploadTab() {
       const result: { text: string; paragraphs: Array<{ index: number; text: string; char_offset: number }> } = await invoke("parse_document", { filePath });
       setFileName(name);
       setParsedText(result.text);
-      // TODO: 接入 AI extract_requirements 自动提取需求项
-      // 当前保留 mock 数据作为 fallback，实际接入后替换
-      if (requirements.length === 0) {
-        setRequirements([
-          { id: 1, section: "", text: "实现基于角色的访问控制（RBAC）", category: "技术要求", mandatory: true, keywords: ["RBAC", "访问控制"], checked: true },
-          { id: 2, section: "", text: "支持 LDAP/AD 域账号集成", category: "技术要求", mandatory: true, keywords: ["LDAP", "AD"], checked: true },
-          { id: 3, section: "", text: "密码策略需满足等保 2.0 三级要求", category: "技术要求", mandatory: true, keywords: ["密码策略", "等保"], checked: true },
-          { id: 4, section: "", text: "投标人须具备信息安全等级保护测评机构资质", category: "资质要求", mandatory: true, keywords: ["资质", "等保测评"], checked: true },
-          { id: 5, section: "", text: "报价须包含三年维保费用", category: "商务要求", mandatory: true, keywords: ["维保", "报价"], checked: false },
-        ]);
+      // 调用 AI 自动提取需求项
+      let extractedItems: RequirementItem[] | null = null;
+      try {
+        const extracted: {
+          requirements?: Array<{ id: number; text: string; certainty: string; selected: boolean }>;
+        } = await invoke("extract_requirements", { text: result.text, docType: "technical" });
+        const items = (extracted?.requirements || []).map((r) => ({
+          id: r.id,
+          section: "",
+          text: r.text,
+          category: "技术要求",
+          mandatory: true,
+          keywords: [] as string[],
+          checked: r.selected,
+        }));
+        if (items.length > 0) {
+          extractedItems = items;
+        }
+      } catch (extractErr: any) {
+        console.warn("AI 需求提取失败:", extractErr);
       }
+      // AI 提取为空或失败时 fallback 到 mock 数据，不阻断上传流程
+      setRequirements(extractedItems ?? [
+        { id: 1, section: "", text: "实现基于角色的访问控制（RBAC）", category: "技术要求", mandatory: true, keywords: ["RBAC", "访问控制"], checked: true },
+        { id: 2, section: "", text: "支持 LDAP/AD 域账号集成", category: "技术要求", mandatory: true, keywords: ["LDAP", "AD"], checked: true },
+        { id: 3, section: "", text: "密码策略需满足等保 2.0 三级要求", category: "技术要求", mandatory: true, keywords: ["密码策略", "等保"], checked: true },
+        { id: 4, section: "", text: "投标人须具备信息安全等级保护测评机构资质", category: "资质要求", mandatory: true, keywords: ["资质", "等保测评"], checked: true },
+        { id: 5, section: "", text: "报价须包含三年维保费用", category: "商务要求", mandatory: true, keywords: ["维保", "报价"], checked: false },
+      ]);
     } catch (e: any) {
       setError(`解析失败: ${String(e)}`);
     } finally {
@@ -221,16 +239,7 @@ function UploadTab() {
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    const files = e.dataTransfer.files;
-    if (files.length === 0) return;
-    const file = files[0];
-    // Tauri 桌面环境中 File 对象可能暴露 path 属性
-    const path = (file as any).path;
-    if (path) {
-      await handleParseFile(path, file.name);
-    } else {
-      setError("无法获取文件路径，请使用点击选择文件");
-    }
+    setError("拖拽上传暂不可用，请点击选择文件");
   };
 
   const handleSelect = async () => {
