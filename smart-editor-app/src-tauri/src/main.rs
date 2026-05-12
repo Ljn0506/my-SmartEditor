@@ -761,6 +761,22 @@ fn main() {
                 config_path,
 
             });
+
+            let app_handle = app.handle().clone();
+            let window = app.get_webview_window("main").unwrap();
+            window.on_window_event(move |event| {
+                let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event else { return; };
+                let Some(path) = paths.first() else { return; };
+                let path_str = path.to_string_lossy().to_string();
+                let name = path.file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+                let _ = app_handle.emit("file-dropped", serde_json::json!({
+                    "path": path_str,
+                    "name": name,
+                }));
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

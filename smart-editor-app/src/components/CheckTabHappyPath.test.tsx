@@ -97,6 +97,13 @@ describe("CheckTab Happy Path E2E", () => {
           model: "llama3",
         });
       }
+      if (cmd === "extract_requirements") {
+        return Promise.resolve({
+          requirements: [
+            { id: 1, text: "测试需求项", certainty: "high", selected: true },
+          ],
+        });
+      }
       return Promise.resolve([]);
     });
 

@@ -19,7 +19,7 @@ import CheckResultsPanel, {
 } from "./components/CheckResultsPanel";
 
 
-import { useRequirements, type RequirementItem } from "./contexts/RequirementsContext";
+import { useRequirements } from "./contexts/RequirementsContext";
 
 // 标签页类型
 type TabKey = "upload" | "generate" | "check" | "settings";
@@ -184,6 +184,7 @@ function UploadTab() {
 
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [analysisPhase, setAnalysisPhase] = useState<'parsing' | 'analyzing' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const toggleReq = (id: number) => {
@@ -194,14 +195,16 @@ function UploadTab() {
 
   const handleParseFile = async (filePath: string, name: string) => {
     setIsLoading(true);
+    setAnalysisPhase('parsing');
     setError(null);
     setParsedText("");
+    setRequirements([]);
     try {
       const result: { text: string; paragraphs: Array<{ index: number; text: string; char_offset: number }> } = await invoke("parse_document", { filePath });
       setFileName(name);
       setParsedText(result.text);
       // 调用 AI 自动提取需求项
-      let extractedItems: RequirementItem[] | null = null;
+      setAnalysisPhase('analyzing');
       try {
         const extracted: {
           requirements?: Array<{ id: number; text: string; certainty: string; selected: boolean }>;
@@ -215,32 +218,41 @@ function UploadTab() {
           keywords: [] as string[],
           checked: r.selected,
         }));
-        if (items.length > 0) {
-          extractedItems = items;
-        }
+        setRequirements(items);
       } catch (extractErr: any) {
-        console.warn("AI 需求提取失败:", extractErr);
+        setError(`需求分析失败: ${String(extractErr)}`);
       }
-      // AI 提取为空或失败时 fallback 到 mock 数据，不阻断上传流程
-      setRequirements(extractedItems ?? [
-        { id: 1, section: "", text: "实现基于角色的访问控制（RBAC）", category: "技术要求", mandatory: true, keywords: ["RBAC", "访问控制"], checked: true },
-        { id: 2, section: "", text: "支持 LDAP/AD 域账号集成", category: "技术要求", mandatory: true, keywords: ["LDAP", "AD"], checked: true },
-        { id: 3, section: "", text: "密码策略需满足等保 2.0 三级要求", category: "技术要求", mandatory: true, keywords: ["密码策略", "等保"], checked: true },
-        { id: 4, section: "", text: "投标人须具备信息安全等级保护测评机构资质", category: "资质要求", mandatory: true, keywords: ["资质", "等保测评"], checked: true },
-        { id: 5, section: "", text: "报价须包含三年维保费用", category: "商务要求", mandatory: true, keywords: ["维保", "报价"], checked: false },
-      ]);
     } catch (e: any) {
       setError(`解析失败: ${String(e)}`);
     } finally {
       setIsLoading(false);
+      setAnalysisPhase(null);
     }
   };
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    setError("拖拽上传暂不可用，请点击选择文件");
   };
+
+  const stableParseFileRef = useRef(handleParseFile);
+  stableParseFileRef.current = handleParseFile;
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<{ path: string; name: string }>("file-dropped", (event) => {
+      stableParseFileRef.current(event.payload.path, event.payload.name);
+    })
+      .then((f) => {
+        unlisten = f;
+      })
+      .catch((err) => {
+        console.warn("监听文件拖拽事件失败:", err);
+      });
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
 
   const handleSelect = async () => {
     try {
@@ -289,7 +301,9 @@ function UploadTab() {
         >
           <FileText size={40} className="mx-auto text-gray-400 mb-3" />
           {isLoading ? (
-            <p className="text-blue-600 font-medium">正在解析文件...</p>
+            <p className="text-blue-600 font-medium">
+              {analysisPhase === 'parsing' ? '正在解析文档...' : '正在分析需求要点...'}
+            </p>
           ) : fileName ? (
             <>
               <p className="text-gray-800 font-medium">{fileName}</p>
@@ -325,7 +339,13 @@ function UploadTab() {
       <section>
         <h2 className="text-base font-semibold mb-3">需求要点提取</h2>
         <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
-          {requirements.map((req) => (
+          {requirements.length === 0 && !isLoading && parsedText && !error ? (
+            <div className="px-4 py-6 text-center text-gray-500">
+              <p className="text-sm">未从文档中识别出明确需求要点</p>
+              <p className="text-xs mt-1 text-gray-400">请手动添加</p>
+            </div>
+          ) : (
+            requirements.map((req) => (
             <label
               key={req.id}
               className="flex items-start gap-3 px-4 py-3 hover:bg-gray-50 cursor-pointer"
@@ -345,7 +365,7 @@ function UploadTab() {
                 </span>
               </div>
             </label>
-          ))}
+          )))}
         </div>
         <button className="mt-2 text-sm text-blue-600 hover:text-blue-700 font-medium">
           + 添加自定义要点

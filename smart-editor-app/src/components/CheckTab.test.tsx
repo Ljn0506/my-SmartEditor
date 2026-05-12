@@ -46,6 +46,13 @@ describe("CheckTab (ReviewTab)", () => {
           model: "llama3",
         });
       }
+      if (cmd === "extract_requirements") {
+        return Promise.resolve({
+          requirements: [
+            { id: 1, text: "具备法人资格", certainty: "high", selected: true },
+          ],
+        });
+      }
       return Promise.resolve([]);
     });
     mockOpen.mockResolvedValue("/tmp/test.docx");
@@ -84,6 +91,13 @@ describe("CheckTab (ReviewTab)", () => {
           base_url: "http://localhost:11434",
           api_key: null,
           model: "llama3",
+        });
+      }
+      if (cmd === "extract_requirements") {
+        return Promise.resolve({
+          requirements: [
+            { id: 1, text: "测试需求", certainty: "high", selected: true },
+          ],
         });
       }
       return Promise.resolve([]);

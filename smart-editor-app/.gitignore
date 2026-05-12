@@ -14,3 +14,6 @@ src-tauri/gen/
 # Logs
 *.log
 npm-debug.log*
+
+# Local database
+src-tauri/data.db
