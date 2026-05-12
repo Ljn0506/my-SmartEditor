@@ -2,14 +2,7 @@ use std::path::Path;
 
 use crate::error::{AppError, Result};
 use crate::models::{FixMode, FixResult, ParagraphChange, SelfReviewIssue};
-
-fn validate_path(path: &str) -> Result<()> {
-    let p = std::path::Path::new(path);
-    if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
-        return Err(AppError::Validation("非法文件路径".to_string()));
-    }
-    Ok(())
-}
+use crate::utils::validate_path;
 
 /// 一键修复：处理 auto_fixable=true 的问题，支持 Copy / Overwrite 两种模式
 pub fn apply_self_review_fixes(

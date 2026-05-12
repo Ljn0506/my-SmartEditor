@@ -12,26 +12,81 @@ fn validate_ai_url(url: &str) -> Result<()> {
         .ok_or_else(|| AppError::Validation("API 地址缺少 host".to_string()))?;
     let host_lower = host.to_lowercase();
 
-    // 桌面应用允许 localhost / 127.0.0.1（本地 Ollama 等）
-    // 阻止 link-local
+    // DNS rebinding 防护 TODO：若 host 是域名，先解析再校验解析后的 IP
+    // 当前先 block 明显的 IP 字面量和 localhost
+
+    // block localhost
+    if host_lower == "localhost" {
+        return Err(AppError::Validation("不允许使用 localhost 作为 API 地址".to_string()));
+    }
+
+    // block 0.0.0.0
+    if host_lower == "0.0.0.0" {
+        return Err(AppError::Validation("不允许使用 0.0.0.0 作为 API 地址".to_string()));
+    }
+
+    // block 127.0.0.0/8
+    if host_lower.starts_with("127.") {
+        return Err(AppError::Validation("不允许使用 127.0.0.0/8 地址作为 API 地址".to_string()));
+    }
+
+    // block link-local
     if host_lower.starts_with("169.254.") {
         return Err(AppError::Validation("不允许使用 link-local 地址作为 API 地址".to_string()));
     }
-    // 阻止内网 IPv4
-    if host_lower.starts_with("10.")
-        || host_lower.starts_with("192.168.")
-        || host_lower.starts_with("172.")
-    {
-        // 172.16.0.0/12
+
+    // block 10.0.0.0/8
+    if host_lower.starts_with("10.") {
+        return Err(AppError::Validation("不允许使用内网 IP 作为 API 地址".to_string()));
+    }
+
+    // block 192.168.0.0/16
+    if host_lower.starts_with("192.168.") {
+        return Err(AppError::Validation("不允许使用内网 IP 作为 API 地址".to_string()));
+    }
+
+    // block 172.16.0.0/12
+    if host_lower.starts_with("172.") {
         if let Some(third) = host_lower.split('.').nth(1).and_then(|s| s.parse::<u8>().ok()) {
             if third >= 16 && third <= 31 {
                 return Err(AppError::Validation("不允许使用内网 IP 作为 API 地址".to_string()));
             }
         }
     }
-    // 阻止 IPv6 loopback / link-local
-    if host_lower == "::1" || host_lower == "[::1]" || host_lower.starts_with("fe80:") {
-        return Err(AppError::Validation("不允许使用 IPv6 loopback 或 link-local 地址".to_string()));
+
+    // block IPv6 loopback / link-local / unique local (fc00::/7)
+    // reqwest::Url::host_str() 对 IPv6 可能保留方括号，统一去掉后再判断
+    let host_clean = host_lower.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(&host_lower);
+    // 优先用标准库解析，更可靠
+    if let Ok(ip) = host_clean.parse::<std::net::IpAddr>() {
+        if ip.is_loopback() {
+            return Err(AppError::Validation("不允许使用 IPv6 loopback 或本地地址".to_string()));
+        }
+        match ip {
+            std::net::IpAddr::V4(v4) => {
+                if v4.is_link_local() {
+                    return Err(AppError::Validation("不允许使用 IPv6 loopback 或本地地址".to_string()));
+                }
+            }
+            std::net::IpAddr::V6(v6) => {
+                // fe80::/10
+                if (v6.segments()[0] & 0xffc0) == 0xfe80 {
+                    return Err(AppError::Validation("不允许使用 IPv6 loopback 或本地地址".to_string()));
+                }
+                // fc00::/7
+                if (v6.segments()[0] & 0xfe00) == 0xfc00 {
+                    return Err(AppError::Validation("不允许使用 IPv6 loopback 或本地地址".to_string()));
+                }
+            }
+        }
+    } else {
+        // 解析失败时兜底字符串匹配（应对非标准格式）
+        if host_clean.starts_with("fe80:")
+            || (host_clean.starts_with("fc") && host_clean.contains(':'))
+            || (host_clean.starts_with("fd") && host_clean.contains(':'))
+        {
+            return Err(AppError::Validation("不允许使用 IPv6 loopback 或本地地址".to_string()));
+        }
     }
     Ok(())
 }
@@ -933,4 +988,97 @@ fn validate_requirements(parsed: &crate::models::ParsedRequirements) -> Result<(
 #[derive(Debug, Deserialize)]
 struct OllamaResponse {
     response: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_ai_url_blocks_localhost() {
+        assert!(validate_ai_url("http://localhost:11434").is_err());
+        assert!(validate_ai_url("http://localhost").is_err());
+        assert!(validate_ai_url("https://localhost/api").is_err());
+    }
+
+    #[test]
+    fn test_validate_ai_url_blocks_private_ip() {
+        // 127.0.0.0/8
+        assert!(validate_ai_url("http://127.0.0.1:11434").is_err());
+        assert!(validate_ai_url("http://127.1.2.3").is_err());
+        // 0.0.0.0
+        assert!(validate_ai_url("http://0.0.0.0").is_err());
+        // 10.0.0.0/8
+        assert!(validate_ai_url("http://10.0.0.1").is_err());
+        // 172.16.0.0/12
+        assert!(validate_ai_url("http://172.16.0.1").is_err());
+        assert!(validate_ai_url("http://172.31.255.1").is_err());
+        // 192.168.0.0/16
+        assert!(validate_ai_url("http://192.168.1.1").is_err());
+        // 169.254.0.0/16
+        assert!(validate_ai_url("http://169.254.1.1").is_err());
+        // IPv6
+        assert!(validate_ai_url("http://[::1]").is_err());
+        assert!(validate_ai_url("http://[fe80::1]").is_err());
+        assert!(validate_ai_url("http://[fc00::1]").is_err());
+        assert!(validate_ai_url("http://[fd00::1]").is_err());
+    }
+
+    #[test]
+    fn test_validate_ai_url_allows_public() {
+        assert!(validate_ai_url("https://api.openai.com").is_ok());
+        assert!(validate_ai_url("https://api.anthropic.com/v1").is_ok());
+        assert!(validate_ai_url("http://8.8.8.8").is_ok());
+        assert!(validate_ai_url("http://1.1.1.1:8080").is_ok());
+    }
+
+    #[test]
+    fn test_extract_param_placeholders_basic() {
+        let text = "项目名称为[PARAM:项目名称]，交付周期为[PARAM:交付周期]天";
+        let result = extract_param_placeholders(text);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].key, "项目名称");
+        assert_eq!(result[0].label, "项目名称");
+        assert_eq!(result[1].key, "交付周期");
+        assert_eq!(result[1].label, "交付周期");
+    }
+
+    #[test]
+    fn test_extract_param_placeholders_empty() {
+        let text = "这是一段没有占位符的文本";
+        let result = extract_param_placeholders(text);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_extract_param_placeholders_no_panic_on_malformed() {
+        // 异常格式不应 panic
+        let _ = extract_param_placeholders("[PARAM:未闭合");
+        let _ = extract_param_placeholders("[PARAM:]");
+        let _ = extract_param_placeholders("");
+    }
+
+    #[test]
+    fn test_extract_risk_flags_with_flags() {
+        let text = "正文内容\n{\"risk_flags\": [\"报价敏感\", \"承诺风险\"]}";
+        let (content, flags) = extract_risk_flags(text);
+        assert_eq!(flags, vec!["报价敏感", "承诺风险"]);
+        assert!(!content.contains("risk_flags"));
+    }
+
+    #[test]
+    fn test_extract_risk_flags_empty_array() {
+        let text = "正文内容\n{\"risk_flags\": []}";
+        let (content, flags) = extract_risk_flags(text);
+        assert!(flags.is_empty());
+        assert!(!content.contains("risk_flags"));
+    }
+
+    #[test]
+    fn test_extract_risk_flags_no_json() {
+        let text = "纯正文内容，没有风险标签";
+        let (content, flags) = extract_risk_flags(text);
+        assert!(flags.is_empty());
+        assert_eq!(content, "纯正文内容，没有风险标签");
+    }
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Sparkles,
@@ -204,18 +204,21 @@ export default function GenerateTab({ onNavigateToCheck }: GenerateTabProps) {
     setGeneratingAll(true);
     setError(null);
     try {
-      let updatedCards = [...cards];
-      for (const outline of outlines) {
-        const card: Card = await invoke("generate_card", {
-          outline,
-          requirementsText: parsedText,
-          references: [],
-          docType: getDocType(docTarget),
-          globalParams,
-        });
-        updatedCards = updatedCards.map((c) => (c.id === card.id ? card : c));
-        setCards(updatedCards);
-      }
+      const generatedCards = await Promise.all(
+        outlines.map(async (outline) => {
+          const card: Card = await invoke("generate_card", {
+            outline,
+            requirementsText: parsedText,
+            references: [],
+            docType: getDocType(docTarget),
+            globalParams,
+          });
+          return card;
+        })
+      );
+      const generatedMap = new Map(generatedCards.map((c) => [c.id, c]));
+      const updatedCards = cards.map((c) => generatedMap.get(c.id) ?? c);
+      setCards(updatedCards);
       await invoke("save_cards", {
         documentTarget: docTarget,
         cards: updatedCards,

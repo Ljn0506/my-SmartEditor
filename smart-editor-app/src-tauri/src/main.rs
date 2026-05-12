@@ -16,6 +16,7 @@ mod parser;
 mod punctuation;
 mod search;
 mod self_review;
+mod utils;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

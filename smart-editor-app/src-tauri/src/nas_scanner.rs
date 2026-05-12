@@ -5,16 +5,9 @@ use walkdir::WalkDir;
 use crate::error::Result;
 use crate::models::{DocumentType, ProjectPhase, Template};
 use crate::parser::parse_document;
+use crate::utils::validate_path;
 
 const SUPPORTED_EXTS: &[&str] = &["docx", "pdf", "xlsx", "xls", "txt", "md"];
-
-fn validate_path(path: &str) -> Result<()> {
-    let p = std::path::Path::new(path);
-    if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
-        return Err(crate::error::AppError::Validation("非法文件路径".to_string()));
-    }
-    Ok(())
-}
 
 /// 扫描目录，返回所有支持的文件路径
 pub fn scan_directory(dir_path: &str) -> Result<Vec<String>> {
