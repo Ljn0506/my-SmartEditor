@@ -178,8 +178,8 @@ function UploadTab() {
     setRequirements,
     parsedText,
     setParsedText,
-    fileName,
-    setFileName,
+    uploadedFiles,
+    setUploadedFiles,
   } = useRequirements();
 
   const [isDragging, setIsDragging] = useState(false);
@@ -193,35 +193,75 @@ function UploadTab() {
     );
   };
 
-  const handleParseFile = async (filePath: string, name: string) => {
+  // 追加文件到上传列表（上限 3 个）
+  const handleAddFile = async (filePath: string, name: string) => {
+    if (uploadedFiles.length >= 3) {
+      setError("最多支持 3 个文件");
+      return;
+    }
+    setUploadedFiles([...uploadedFiles, { path: filePath, name, parsedText: "" }]);
+    setError(null);
+  };
+
+  // 删除单个文件
+  const handleRemoveFile = (index: number) => {
+    const next = uploadedFiles.filter((_, i) => i !== index);
+    setUploadedFiles(next);
+    if (next.length === 0) {
+      setParsedText("");
+      setRequirements([]);
+      setError(null);
+    }
+  };
+
+  // 并行解析所有文件并提取需求
+  const handleParseFiles = async () => {
+    if (uploadedFiles.length === 0) return;
     setIsLoading(true);
     setAnalysisPhase('parsing');
     setError(null);
     setParsedText("");
     setRequirements([]);
+
     try {
-      const result: { text: string; paragraphs: Array<{ index: number; text: string; char_offset: number }> } = await invoke("parse_document", { filePath });
-      setFileName(name);
-      setParsedText(result.text);
-      // 调用 AI 自动提取需求项
-      setAnalysisPhase('analyzing');
-      try {
-        const extracted: {
-          requirements?: Array<{ id: number; text: string; certainty: string; selected: boolean }>;
-        } = await invoke("extract_requirements", { text: result.text, docType: "technical" });
-        const items = (extracted?.requirements || []).map((r) => ({
-          id: r.id,
-          section: "",
-          text: r.text,
-          category: "技术要求",
-          mandatory: true,
-          keywords: [] as string[],
-          checked: r.selected,
-        }));
-        setRequirements(items);
-      } catch (extractErr: any) {
-        setError(`需求分析失败: ${String(extractErr)}`);
-      }
+      const results = await Promise.all(
+        uploadedFiles.map(async (f) => {
+          setAnalysisPhase('analyzing');
+          const parsed = await invoke<{ text: string; paragraphs: Array<{ index: number; text: string; char_offset: number }> }>("parse_document", { filePath: f.path });
+          const extracted: {
+            requirements?: Array<{ id: number; text: string; certainty: string; selected: boolean }>;
+          } = await invoke("extract_requirements", { text: parsed.text, docType: "technical" });
+          return {
+            ...f,
+            parsedText: parsed.text,
+            requirements: (extracted?.requirements || []).map((r) => ({
+              id: r.id,
+              section: "",
+              text: r.text,
+              category: "技术要求",
+              mandatory: true,
+              keywords: [] as string[],
+              checked: r.selected,
+            })),
+          };
+        })
+      );
+
+      // 更新 uploadedFiles（填充 parsedText）
+      setUploadedFiles(results.map((r) => ({ path: r.path, name: r.name, parsedText: r.parsedText })));
+
+      // 合并 parsedText：用分隔符，首部标注文件名
+      const mergedText = results
+        .map((r) => `【${r.name}】\n${r.parsedText}`)
+        .join("\n\n---\n\n");
+      setParsedText(mergedText);
+
+      // 合并 requirements：扁平化并重新编号 id
+      let nextId = 1;
+      const mergedRequirements = results.flatMap((r) =>
+        r.requirements.map((req) => ({ ...req, id: nextId++ }))
+      );
+      setRequirements(mergedRequirements);
     } catch (e: any) {
       setError(`解析失败: ${String(e)}`);
     } finally {
@@ -235,13 +275,19 @@ function UploadTab() {
     setIsDragging(false);
   };
 
-  const stableParseFileRef = useRef(handleParseFile);
-  stableParseFileRef.current = handleParseFile;
+  const stableAddFileRef = useRef(handleAddFile);
+  stableAddFileRef.current = handleAddFile;
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    listen<{ path: string; name: string }>("file-dropped", (event) => {
-      stableParseFileRef.current(event.payload.path, event.payload.name);
+    listen<{ files: Array<{ path: string; name: string }> }>("file-dropped", (event) => {
+      const files = event.payload.files;
+      const remaining = 3 - uploadedFiles.length;
+      if (files.length > remaining) {
+        setError(`最多支持 3 个文件，已自动截取前 ${remaining} 个`);
+      }
+      const toAdd = files.slice(0, remaining);
+      toAdd.forEach((f) => stableAddFileRef.current(f.path, f.name));
     })
       .then((f) => {
         unlisten = f;
@@ -252,20 +298,27 @@ function UploadTab() {
     return () => {
       if (unlisten) unlisten();
     };
-  }, []);
+  }, [uploadedFiles.length]);
 
   const handleSelect = async () => {
     try {
+      const remaining = 3 - uploadedFiles.length;
+      if (remaining <= 0) {
+        setError("最多支持 3 个文件");
+        return;
+      }
       const selected = await open({
-        multiple: false,
+        multiple: remaining > 1,
         filters: [
           { name: "文档", extensions: ["docx", "pdf", "xlsx", "txt"] },
         ],
       });
-      if (selected && typeof selected === "string") {
-        const name = selected.split("/").pop() || selected;
-        await handleParseFile(selected, name);
-      }
+      if (!selected) return;
+      const files: string[] = Array.isArray(selected) ? selected : [selected];
+      files.slice(0, remaining).forEach((path) => {
+        const name = path.split("/").pop() || path;
+        handleAddFile(path, name);
+      });
     } catch (e: any) {
       setError(`选择文件失败: ${String(e)}`);
     }
@@ -293,31 +346,65 @@ function UploadTab() {
               handleSelect();
             }
           }}
-          className={`border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-colors ${
+          className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-colors ${
             isDragging
               ? "border-blue-400 bg-blue-50"
               : "border-gray-300 bg-white hover:border-gray-400"
           }`}
         >
-          <FileText size={40} className="mx-auto text-gray-400 mb-3" />
-          {isLoading ? (
-            <p className="text-blue-600 font-medium">
-              {analysisPhase === 'parsing' ? '正在解析文档...' : '正在分析需求要点...'}
-            </p>
-          ) : fileName ? (
-            <>
-              <p className="text-gray-800 font-medium">{fileName}</p>
-              <p className="text-gray-400 text-sm mt-1">点击重新选择文件</p>
-            </>
-          ) : (
-            <>
-              <p className="text-gray-600 font-medium">拖入文件到这里 或 点击选择</p>
-              <p className="text-gray-400 text-sm mt-1">
-                支持: .docx .doc .pdf .xlsx .txt
-              </p>
-            </>
+          <FileText size={32} className="mx-auto text-gray-400 mb-2" />
+          <p className="text-gray-600 font-medium text-sm">拖入文件到这里 或 点击选择</p>
+          <p className="text-gray-400 text-xs mt-1">支持: .docx .pdf .xlsx .txt（最多 3 个）</p>
+        </div>
+
+        {/* 文件列表 */}
+        {uploadedFiles.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {uploadedFiles.map((f, idx) => (
+              <div
+                key={idx}
+                className="flex items-center justify-between px-3 py-2 bg-white rounded-lg border border-gray-200"
+              >
+                <span className="text-sm text-gray-700 truncate">{f.name}</span>
+                <button
+                  onClick={() => handleRemoveFile(idx)}
+                  className="text-xs text-red-500 hover:text-red-600 ml-2"
+                >
+                  删除
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* 操作按钮 */}
+        <div className="mt-3 flex gap-2">
+          {uploadedFiles.length < 3 && (
+            <button
+              onClick={handleSelect}
+              className="flex-1 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+            >
+              选择文件
+            </button>
+          )}
+          {uploadedFiles.length > 0 && !isLoading && (
+            <button
+              onClick={handleParseFiles}
+              className="flex-1 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+            >
+              开始分析
+            </button>
           )}
         </div>
+
+        {/* 分析进度 */}
+        {isLoading && (
+          <p className="mt-2 text-sm text-blue-600 font-medium text-center">
+            {analysisPhase === 'parsing'
+              ? `正在解析文档（${uploadedFiles.length} 个文件）...`
+              : '正在分析需求要点...'}
+          </p>
+        )}
         {error && (
           <p className="mt-2 text-sm text-red-600">{error}</p>
         )}

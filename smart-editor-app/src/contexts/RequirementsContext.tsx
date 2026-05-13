@@ -17,14 +17,21 @@ export interface ParagraphInfo {
   char_offset: number;
 }
 
+export interface UploadedFile {
+  path: string;
+  name: string;
+  parsedText: string;
+}
+
 interface RequirementsContextType {
   // 招标需求（UploadTab 解析）
   requirements: RequirementItem[];
   setRequirements: (items: RequirementItem[]) => void;
   parsedText: string;
   setParsedText: (text: string) => void;
-  fileName: string | null;
-  setFileName: (name: string | null) => void;
+  mergedFileName: string | null;
+  uploadedFiles: UploadedFile[];
+  setUploadedFiles: (files: UploadedFile[]) => void;
   // 投标文档（CheckTab 选择）
   bidFilePath: string | null;
   setBidFilePath: (path: string | null) => void;
@@ -48,7 +55,14 @@ const RequirementsContext = createContext<RequirementsContextType | undefined>(
 export function RequirementsProvider({ children }: { children: ReactNode }) {
   const [requirements, setRequirements] = useState<RequirementItem[]>([]);
   const [parsedText, setParsedText] = useState<string>("");
-  const [fileName, setFileName] = useState<string | null>(null);
+  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
+
+  // 合并文件名展示：如 "项目A.docx 等 3 个文件"
+  const mergedFileName = uploadedFiles.length === 0
+    ? null
+    : uploadedFiles.length === 1
+    ? uploadedFiles[0].name
+    : `${uploadedFiles[0].name} 等 ${uploadedFiles.length} 个文件`;
 
   // CheckTab 持久化状态
   const [bidFilePath, setBidFilePath] = useState<string | null>(null);
@@ -65,8 +79,9 @@ export function RequirementsProvider({ children }: { children: ReactNode }) {
         setRequirements,
         parsedText,
         setParsedText,
-        fileName,
-        setFileName,
+        mergedFileName,
+        uploadedFiles,
+        setUploadedFiles,
         bidFilePath,
         setBidFilePath,
         bidFileName,
