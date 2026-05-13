@@ -48,7 +48,7 @@ fn validate_ai_url(url: &str) -> Result<()> {
     // block 172.16.0.0/12
     if host_lower.starts_with("172.") {
         if let Some(third) = host_lower.split('.').nth(1).and_then(|s| s.parse::<u8>().ok()) {
-            if third >= 16 && third <= 31 {
+            if (16..=31).contains(&third) {
                 return Err(AppError::Validation("不允许使用内网 IP 作为 API 地址".to_string()));
             }
         }

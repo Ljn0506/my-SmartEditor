@@ -68,6 +68,14 @@ describe("CheckTab (ReviewTab)", () => {
       expect(screen.getByText(/test.docx/)).toBeInTheDocument();
     });
 
+    // 点击开始分析以解析需求
+    const analyzeBtn = screen.getByRole("button", { name: /开始分析/ });
+    fireEvent.click(analyzeBtn);
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/具备法人资格/).length).toBeGreaterThanOrEqual(1);
+    });
+
     // 切换到校对 Tab
     fireEvent.click(screen.getByText("校对"));
     await waitFor(() => {

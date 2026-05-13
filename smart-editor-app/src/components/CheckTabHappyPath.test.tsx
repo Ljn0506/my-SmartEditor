@@ -119,6 +119,14 @@ describe("CheckTab Happy Path E2E", () => {
       expect(screen.getByText(/req.docx/)).toBeInTheDocument();
     });
 
+    // 点击开始分析以解析需求
+    const analyzeBtn = screen.getByRole("button", { name: /开始分析/ });
+    fireEvent.click(analyzeBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/测试需求项/)).toBeInTheDocument();
+    });
+
     // Step 2: 切换到校对 Tab，选择投标 .docx
     mockOpen.mockResolvedValueOnce("/tmp/bid.docx");
     fireEvent.click(screen.getByText("校对"));
