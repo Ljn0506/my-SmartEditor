@@ -3,7 +3,7 @@ use std::path::Path;
 use walkdir::WalkDir;
 
 use crate::error::Result;
-use crate::models::{DocumentType, ProjectPhase, Template};
+use crate::models::{DocumentType, Template};
 use crate::parser::parse_document;
 use crate::utils::validate_path;
 
@@ -102,8 +102,8 @@ pub fn file_to_template(file_path: &str) -> Result<Template> {
         .unwrap_or_else(|| "未命名".to_string());
 
     let _doc_type = detect_document_type(&file_name);
-    let (doc_attr, business_domain, content_module) =
-        crate::category::infer_categories(&file_name, &text);
+    let (doc_attr, business_domain, content_module, project_phase, security_layer) =
+        crate::category::infer_categories(file_path, &file_name, &text);
 
     let tags = infer_tags(&file_name, &text);
 
@@ -114,9 +114,9 @@ pub fn file_to_template(file_path: &str) -> Result<Template> {
         content_html: None,
         doc_attr,
         business_domain,
-        security_layer: None,
+        security_layer,
         content_module,
-        project_phase: Some(ProjectPhase::Bidding),
+        project_phase,
         tags,
         source_file: Some(file_path.to_string()),
         source_para_range: None,
@@ -240,17 +240,19 @@ mod tests {
 
     #[test]
     fn test_infer_categories() {
-        let (doc_attr, domain, module) =
-            crate::category::infer_categories("等保2.0投标应答技术方案.docx", "");
+        let (doc_attr, domain, module, phase, layer) =
+            crate::category::infer_categories("", "等保2.0投标应答技术方案.docx", "");
         assert_eq!(doc_attr, Some(crate::models::DocAttr::BidResponse));
         assert_eq!(domain, Some(crate::models::BusinessDomain::NetworkSecurity));
         assert_eq!(
             module,
             Some(crate::models::ContentModule::TechnicalProposal)
         );
+        assert_eq!(phase, None);
+        assert_eq!(layer, None);
 
-        let (doc_attr2, domain2, module2) =
-            crate::category::infer_categories("偏离表-资质证书.xlsx", "");
+        let (doc_attr2, domain2, module2, phase2, layer2) =
+            crate::category::infer_categories("", "偏离表-资质证书.xlsx", "");
         assert_eq!(doc_attr2, Some(crate::models::DocAttr::ReportMaterial));
         assert_eq!(
             domain2,
@@ -260,6 +262,8 @@ mod tests {
             module2,
             Some(crate::models::ContentModule::DeviationExplanation)
         );
+        assert_eq!(phase2, None);
+        assert_eq!(layer2, None);
     }
 
     #[test]

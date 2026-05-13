@@ -81,6 +81,7 @@ define_enum!(ContentModule {
     QualificationProof = "资质证明",
     DeviationExplanation = "偏离说明",
     CaseIntroduction = "案例介绍",
+    BidResponse = "投标应答",
 });
 
 define_enum!(ProjectPhase {
