@@ -767,15 +767,15 @@ fn main() {
             let window = app.get_webview_window("main").unwrap();
             window.on_window_event(move |event| {
                 let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event else { return; };
-                let Some(path) = paths.first() else { return; };
-                let path_str = path.to_string_lossy().to_string();
-                let name = path.file_name()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "unknown".to_string());
-                let _ = app_handle.emit("file-dropped", serde_json::json!({
-                    "path": path_str,
-                    "name": name,
-                }));
+                if paths.is_empty() { return; }
+                let files: Vec<serde_json::Value> = paths.iter().map(|path| {
+                    let path_str = path.to_string_lossy().to_string();
+                    let name = path.file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    serde_json::json!({ "path": path_str, "name": name })
+                }).collect();
+                let _ = app_handle.emit("file-dropped", serde_json::json!({ "files": files }));
             });
 
             Ok(())

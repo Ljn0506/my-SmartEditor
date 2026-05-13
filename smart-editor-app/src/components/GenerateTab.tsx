@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Sparkles,
@@ -60,7 +60,7 @@ export interface GenerateTabProps {
 }
 
 export default function GenerateTab({ onNavigateToCheck }: GenerateTabProps) {
-  const { requirements, parsedText, fileName } = useRequirements();
+  const { requirements, parsedText, mergedFileName } = useRequirements();
   const [docTarget, setDocTarget] = useState<"technical" | "business">("technical");
   const [outlines, setOutlines] = useState<CardOutline[]>([]);
   const [cards, setCards] = useState<Card[]>([]);
@@ -446,7 +446,7 @@ export default function GenerateTab({ onNavigateToCheck }: GenerateTabProps) {
             {hasRequirements ? (
               <span className="flex items-center gap-1">
                 <FileText size={12} />
-                需求来源: {fileName || "已解析"} ({requirements.length} 项需求)
+                需求来源: {mergedFileName || "已解析"} ({requirements.length} 项需求)
               </span>
             ) : (
               <span className="text-amber-600">
