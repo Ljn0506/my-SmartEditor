@@ -17,7 +17,7 @@
 ## Security
 
 - ~~**Priority:** P1 — Harden SSRF validation: block 127.0.0.0/8, 0.0.0.0, and DNS rebinding~~ **Completed:** v0.3.1.0 (2026-05-15)
-- **Priority:** P2 — Sanitize HTML before clipboard export
+- ~~**Priority:** P2 — Sanitize HTML before clipboard export~~ **Completed:** v0.3.1.0 (2026-05-15)
 - **Priority:** P2 — Scope path validation to allowed root directory (not just ParentDir check)
 
 ## Testing
