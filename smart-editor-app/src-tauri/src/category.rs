@@ -239,7 +239,7 @@ mod tests {
     #[test]
     fn test_path_inference_contract_data_qualification() {
         let path = "/data/03-合同阶段/数据安全/资质证明/资质证书.pdf";
-        let (attr, domain, module, phase, layer) = infer_categories(path, "资质证书.pdf", "");
+        let (_attr, domain, module, phase, _layer) = infer_categories(path, "资质证书.pdf", "");
         assert_eq!(phase, Some(ProjectPhase::Contract));
         assert_eq!(domain, Some(BusinessDomain::DataSecurity));
         assert_eq!(module, Some(ContentModule::QualificationProof));
@@ -248,7 +248,7 @@ mod tests {
     #[test]
     fn test_path_inference_operation_implementation() {
         let path = "/data/投标阶段/安全运营/实施计划/实施进度.xlsx";
-        let (attr, domain, module, phase, layer) = infer_categories(path, "实施进度.xlsx", "");
+        let (_attr, domain, module, phase, _layer) = infer_categories(path, "实施进度.xlsx", "");
         assert_eq!(phase, Some(ProjectPhase::Bidding));
         assert_eq!(domain, Some(BusinessDomain::SecurityOperation));
         assert_eq!(module, Some(ContentModule::ImplementationPlan));

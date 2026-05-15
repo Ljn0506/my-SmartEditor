@@ -4,7 +4,7 @@ version = "0.3.0"
 description = "智能文档编写工具"
 authors = ["you"]
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.84.0"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -45,6 +45,7 @@ once_cell = "1"
 
 # 剪贴板
 arboard = "3"
+ammonia = "4"
 
 [features]
 default = ["custom-protocol"]

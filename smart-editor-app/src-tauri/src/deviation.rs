@@ -260,6 +260,13 @@ pub fn check_deviation_items(req_items: &[RequirementItem], bid_text: &str) -> D
 impl DeviationReport {
     /// 导出为 Markdown 格式
     pub fn to_markdown(&self) -> String {
+        let esc = |s: &str| -> String {
+            s.replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('"', "&quot;")
+                .replace('|', "\\|")
+        };
         let mut md = String::new();
         md.push_str("# 偏离检查报告\n\n");
         md.push_str(&format!(
@@ -283,12 +290,12 @@ impl DeviationReport {
             md.push_str(&format!(
                 "| {} | {} | {} | {} | {} | {} | {} |\n",
                 item.id,
-                item.section.replace('|', "\\|"),
-                item.requirement_text.replace('|', "\\|"),
+                esc(&item.section),
+                esc(&item.requirement_text),
                 status_str,
                 item.risk_level,
-                item.explanation.replace('|', "\\|"),
-                item.suggestion.replace('|', "\\|")
+                esc(&item.explanation),
+                esc(&item.suggestion)
             ));
         }
         md

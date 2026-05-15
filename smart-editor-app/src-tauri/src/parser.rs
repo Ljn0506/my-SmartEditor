@@ -263,7 +263,7 @@ mod tests {
 
         // paragraphs 数量 > 0
         assert!(
-            doc.paragraphs.len() > 0,
+            !doc.paragraphs.is_empty(),
             "paragraphs 数量应 > 0，实际: {}",
             doc.paragraphs.len()
         );

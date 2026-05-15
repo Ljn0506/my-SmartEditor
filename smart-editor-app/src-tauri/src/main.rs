@@ -52,11 +52,13 @@ impl AppState {
 
 #[tauri::command]
 fn parse_document(file_path: String) -> Result<ParsedDocumentStructured, String> {
+    crate::utils::validate_path(&file_path).map_err(|e| e.to_string())?;
     parser::parse_document_structured(&file_path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn parse_requirement_file(file_path: String) -> Result<ParsedDocument, String> {
+    crate::utils::validate_path(&file_path).map_err(|e| e.to_string())?;
     let text = parser::parse_document(&file_path).map_err(|e| e.to_string())?;
     let path = std::path::Path::new(&file_path);
     let file_name = path
@@ -293,6 +295,9 @@ async fn import_nas_files(
         let results: Vec<(Option<Template>, Option<String>)> = paths
             .into_par_iter()
             .map(|path| {
+                if let Err(e) = crate::utils::validate_path(&path) {
+                    return (None, Some(format!("路径验证失败: {}", e)));
+                }
                 let result = nas_scanner::file_to_template(&path);
                 let current = progress.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                 if current % 5 == 0 || current == total {
@@ -409,6 +414,8 @@ async fn check_deviation(bid_text: String, req_text: String) -> Result<Deviation
 
 #[tauri::command]
 async fn check_deviation_files(bid_path: String, req_path: String) -> Result<DeviationReport, String> {
+    crate::utils::validate_path(&bid_path).map_err(|e| e.to_string())?;
+    crate::utils::validate_path(&req_path).map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
         let bid_text = parser::parse_document(&bid_path).map_err(|e| e.to_string())?;
         let req_text = parser::parse_document(&req_path).map_err(|e| e.to_string())?;
@@ -527,6 +534,7 @@ fn apply_self_review_fixes(
     issues: Vec<crate::models::SelfReviewIssue>,
     mode: crate::models::FixMode,
 ) -> Result<crate::models::FixResult, String> {
+    crate::utils::validate_path(&file_path).map_err(|e| e.to_string())?;
     crate::apply_self_review_fixes::apply_self_review_fixes(&file_path, &issues, mode)
         .map_err(|e| e.to_string())
 }
@@ -768,12 +776,15 @@ fn main() {
             window.on_window_event(move |event| {
                 let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event else { return; };
                 if paths.is_empty() { return; }
-                let files: Vec<serde_json::Value> = paths.iter().map(|path| {
+                let files: Vec<serde_json::Value> = paths.iter().filter_map(|path| {
                     let path_str = path.to_string_lossy().to_string();
+                    if crate::utils::validate_path(&path_str).is_err() {
+                        return None;
+                    }
                     let name = path.file_name()
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_else(|| "unknown".to_string());
-                    serde_json::json!({ "path": path_str, "name": name })
+                    Some(serde_json::json!({ "path": path_str, "name": name }))
                 }).collect();
                 let _ = app_handle.emit("file-dropped", serde_json::json!({ "files": files }));
             });
@@ -828,4 +839,53 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_document_blocks_path_traversal() {
+        let res = parse_document("../../../etc/passwd".to_string());
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("非法文件路径"));
+    }
+
+    #[test]
+    fn test_parse_document_blocks_empty_path() {
+        let res = parse_document("".to_string());
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("路径不能为空"));
+    }
+
+    #[test]
+    fn test_parse_requirement_file_blocks_path_traversal() {
+        let res = parse_requirement_file("../secret.docx".to_string());
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("非法文件路径"));
+    }
+
+    #[tokio::test]
+    async fn test_check_deviation_files_blocks_path_traversal() {
+        let res = check_deviation_files(
+            "../../../etc/passwd".to_string(),
+            "../secret.docx".to_string(),
+        )
+        .await;
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(err.contains("非法文件路径"));
+    }
+
+    #[test]
+    fn test_apply_self_review_fixes_blocks_path_traversal() {
+        let res = apply_self_review_fixes(
+            "../template.docx".to_string(),
+            vec![],
+            crate::models::FixMode::Copy,
+        );
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("非法文件路径"));
+    }
 }

@@ -11,6 +11,7 @@ pub struct SearchEngine {
 
 impl SearchEngine {
     pub fn new(host: &str, api_key: Option<&str>) -> Result<Self> {
+        crate::ai::validate_ai_url(host)?;
         let client = Client::new(host, api_key).map_err(|e| AppError::Search(e.to_string()))?;
         Ok(Self {
             client,

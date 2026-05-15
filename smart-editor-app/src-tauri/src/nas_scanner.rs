@@ -94,6 +94,7 @@ pub fn detect_document_type(file_name: &str) -> DocumentType {
 
 /// 将单个文件解析为 Template（未入库）
 pub fn file_to_template(file_path: &str) -> Result<Template> {
+    crate::utils::validate_path(file_path)?;
     let text = parse_document(file_path)?;
     let path = Path::new(file_path);
     let file_name = path
