@@ -2,13 +2,12 @@ use std::path::Path;
 
 use crate::error::{AppError, Result};
 use crate::models::{Paragraph, ParsedDocumentStructured};
+use crate::utils::validate_path;
 
 /// 根据文件扩展名选择对应解析器，提取纯文本
 pub fn parse_document(file_path: &str) -> Result<String> {
+    validate_path(file_path)?;
     let path = Path::new(file_path);
-    if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
-        return Err(AppError::Validation("非法文件路径".to_string()));
-    }
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -30,10 +29,8 @@ pub fn parse_document(file_path: &str) -> Result<String> {
 /// 结构化解析：返回纯文本 + 段落列表（T6）
 /// .docx 按 docx-rs 原始段落单元切分，其他格式 fallback 到按行切分
 pub fn parse_document_structured(file_path: &str) -> Result<ParsedDocumentStructured> {
+    validate_path(file_path)?;
     let path = Path::new(file_path);
-    if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
-        return Err(AppError::Validation("非法文件路径".to_string()));
-    }
     let ext = path
         .extension()
         .and_then(|e| e.to_str())

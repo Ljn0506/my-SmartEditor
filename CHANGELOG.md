@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.2.0] - 2026-05-18
+
+### Added
+- NAS scanner classification v1.0 alignment with knowledge base spec — path inference (3-level directory → 4D classification), filename prefix extraction (`【投标应答】` etc.), security level annotation (`[检测]`/`[防御]`/`[分析]`/`[治理]`)
+- `validate_path_within` function to scope path validation to allowed root directory (double-layer protection with existing `ParentDir` check)
+- Shared frontend constants module (`src/constants/meta.ts`) exporting `STATUS_META` / `SEVERITY_META` — unified across `CheckResultsPanel`, `DeviationPanel`, `PunctuationPanel`
+- AI client mock HTTP tests (5 scenarios: success / non-200 / timeout / connection refused / invalid JSON) using `wiremock`
+- `tempfile` crate integration in `apply_self_review_fixes` tests — eliminates 5 hardcoded `/tmp` path dependencies
+- `ContentModule` enum extended with `ProductMaterial = "产品资料"` for general material classification
+
+### Changed
+- NAS path inference now supports arbitrary root directory depth via anchor-based `find_phase_root` lookup (previously assumed fixed depth)
+- General material files (`00-通用素材/`) use independent classification logic with `ProjectPhase` and `BusinessDomain` returning `None`
+- `PunctuationPanel` severity badge styling unified with other panels (`border-red-200` added to `Error` level)
+
+### Testing
+- Rust unit test count increased from 112 → 149 (37 new tests: 29 category inference + 5 AI mock + 3 path validation)
+- Frontend test count: 23 passed across 5 test files
+
+### Security
+- Path traversal protection extended with root-directory scoping in `parser.rs`, `nas_scanner.rs`, and `utils.rs`
+
 ## [0.3.0.0] - 2026-05-11
 
 ### Added

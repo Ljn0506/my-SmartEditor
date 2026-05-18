@@ -5,11 +5,12 @@ use walkdir::WalkDir;
 use crate::error::Result;
 use crate::models::{DocumentType, Template};
 use crate::parser::parse_document;
-use crate::utils::validate_path;
+use crate::utils::{validate_path, validate_path_within};
 
 const SUPPORTED_EXTS: &[&str] = &["docx", "pdf", "xlsx", "xls", "txt", "md"];
 
 /// 扫描目录，返回所有支持的文件路径
+/// 安全约束：所有返回的文件路径必须在 dir_path 范围内
 pub fn scan_directory(dir_path: &str) -> Result<Vec<String>> {
     validate_path(dir_path)?;
     let mut files = Vec::new();
@@ -24,7 +25,11 @@ pub fn scan_directory(dir_path: &str) -> Result<Vec<String>> {
         if let Some(ext) = entry.path().extension() {
             let ext = ext.to_string_lossy().to_lowercase();
             if SUPPORTED_EXTS.contains(&ext.as_str()) {
-                files.push(entry.path().to_string_lossy().to_string());
+                let file_path = entry.path().to_string_lossy().to_string();
+                // 安全加固：验证文件路径不超出扫描根目录
+                if validate_path_within(&file_path, dir_path).is_ok() {
+                    files.push(file_path);
+                }
             }
         }
     }

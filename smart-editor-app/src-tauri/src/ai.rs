@@ -85,6 +85,11 @@ impl AiClient {
         Ok(Self { config, http })
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_for_test(config: AiConfig, http: reqwest::Client) -> Self {
+        Self { config, http }
+    }
+
     /// 根据文档内容提取需求要点
     pub async fn extract_requirements(
         &self,
@@ -1183,5 +1188,186 @@ mod tests {
         let (content, flags) = extract_risk_flags(text);
         assert!(flags.is_empty());
         assert_eq!(content, "纯正文内容，没有风险标签");
+    }
+
+    // ========== AI Client HTTP Mock 测试（2.14）==========
+
+    #[tokio::test]
+    async fn test_chat_post_json_success() {
+        let mock_server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "hello"}}]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = AiClient::new_for_test(
+            AiConfig {
+                provider: crate::models::AiProvider::DeepSeek,
+                base_url: mock_server.uri(),
+                model: "test-model".to_string(),
+                api_key: Some("test-key".to_string()),
+            },
+            reqwest::Client::new(),
+        );
+
+        let result = client
+            .chat_post_json(
+                &format!("{}/chat/completions", mock_server.uri()),
+                vec![],
+                serde_json::json!({"model": "test"}),
+            )
+            .await;
+
+        assert!(result.is_ok());
+        let data = result.unwrap();
+        assert_eq!(
+            data["choices"][0]["message"]["content"].as_str(),
+            Some("hello")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_chat_post_json_non_200_status() {
+        let mock_server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(500).set_body_string("Internal Server Error"))
+            .mount(&mock_server)
+            .await;
+
+        let client = AiClient::new_for_test(
+            AiConfig {
+                provider: crate::models::AiProvider::DeepSeek,
+                base_url: mock_server.uri(),
+                model: "test-model".to_string(),
+                api_key: Some("test-key".to_string()),
+            },
+            reqwest::Client::new(),
+        );
+
+        let result = client
+            .chat_post_json(
+                &format!("{}/chat/completions", mock_server.uri()),
+                vec![],
+                serde_json::json!({"model": "test"}),
+            )
+            .await;
+
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(err.contains("500"), "错误消息应包含状态码 500: {}", err);
+        assert!(err.contains("AI 请求失败"), "错误消息应提示 AI 请求失败: {}", err);
+    }
+
+    #[tokio::test]
+    async fn test_chat_post_json_timeout() {
+        let mock_server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_delay(std::time::Duration::from_secs(5)),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let short_timeout_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(100))
+            .build()
+            .unwrap();
+
+        let client = AiClient::new_for_test(
+            AiConfig {
+                provider: crate::models::AiProvider::DeepSeek,
+                base_url: mock_server.uri(),
+                model: "test-model".to_string(),
+                api_key: Some("test-key".to_string()),
+            },
+            short_timeout_client,
+        );
+
+        let result = client
+            .chat_post_json(
+                &format!("{}/chat/completions", mock_server.uri()),
+                vec![],
+                serde_json::json!({"model": "test"}),
+            )
+            .await;
+
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(
+            err.contains("AI 请求发送失败") || err.contains("请求超时"),
+            "错误消息应提示请求失败或超时: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_chat_post_json_connection_refused() {
+        // 使用高位随机端口，降低被本地代理拦截的概率
+        let client = AiClient::new_for_test(
+            AiConfig {
+                provider: crate::models::AiProvider::DeepSeek,
+                base_url: "http://127.0.0.1:65432".to_string(),
+                model: "test-model".to_string(),
+                api_key: Some("test-key".to_string()),
+            },
+            reqwest::Client::new(),
+        );
+
+        let result = client
+            .chat_post_json(
+                "http://127.0.0.1:65432/api",
+                vec![],
+                serde_json::json!({"model": "test"}),
+            )
+            .await;
+
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        // 网络不可达时可能是"发送失败"（连接被拒绝）或"请求失败"（代理返回 502）
+        assert!(
+            err.contains("AI 请求发送失败") || err.contains("AI 请求失败"),
+            "错误消息应提示网络错误: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_chat_post_json_invalid_json_response() {
+        let mock_server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_string("not valid json"),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let client = AiClient::new_for_test(
+            AiConfig {
+                provider: crate::models::AiProvider::DeepSeek,
+                base_url: mock_server.uri(),
+                model: "test-model".to_string(),
+                api_key: Some("test-key".to_string()),
+            },
+            reqwest::Client::new(),
+        );
+
+        let result = client
+            .chat_post_json(
+                &format!("{}/chat/completions", mock_server.uri()),
+                vec![],
+                serde_json::json!({"model": "test"}),
+            )
+            .await;
+
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(
+            err.contains("AI 响应解析失败"),
+            "错误消息应提示 AI 响应解析失败: {}",
+            err
+        );
     }
 }

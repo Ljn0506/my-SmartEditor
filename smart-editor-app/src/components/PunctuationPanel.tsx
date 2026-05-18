@@ -1,4 +1,5 @@
 import { SearchCheck } from "lucide-react";
+import { severityMeta } from "../constants/meta";
 
 export type Severity = "Error" | "Warning" | "Info";
 
@@ -17,19 +18,6 @@ interface PunctuationPanelProps {
   loading: boolean;
   onRunCheck: () => void;
   onApplyFixes: () => void;
-}
-
-const SEVERITY_META: Record<
-  string,
-  { bg: string; label: string }
-> = {
-  Error: { bg: "bg-red-50 text-red-700", label: "错误" },
-  Warning: { bg: "bg-amber-50 text-amber-700", label: "警告" },
-  Info: { bg: "bg-blue-50 text-blue-700", label: "提示" },
-};
-
-function severityMeta(s: Severity) {
-  return SEVERITY_META[s] || SEVERITY_META.Info;
 }
 
 export default function PunctuationPanel({

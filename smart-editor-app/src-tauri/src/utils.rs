@@ -11,6 +11,37 @@ pub fn validate_path(path: &str) -> Result<()> {
     Ok(())
 }
 
+/// 验证路径是否在允许的根目录范围内
+/// 用于防止路径遍历攻击超出预期的访问边界
+pub fn validate_path_within(path: &str, allowed_root: &str) -> Result<()> {
+    validate_path(path)?;
+    let allowed = std::path::Path::new(allowed_root);
+    let target = std::path::Path::new(path);
+
+    // 统一转为绝对路径
+    let allowed_abs = if allowed.is_absolute() {
+        allowed.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_default().join(allowed)
+    };
+    let target_abs = if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_default().join(target)
+    };
+
+    // 清理 . 和 .. 组件（不跟随符号链接，避免平台差异）
+    let allowed_clean: std::path::PathBuf = allowed_abs.components().collect();
+    let target_clean: std::path::PathBuf = target_abs.components().collect();
+
+    if !target_clean.starts_with(&allowed_clean) {
+        return Err(AppError::Validation(
+            "路径不在允许的根目录范围内".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// 检查 IP 是否为私有/本地/内网地址
 pub fn is_private_ip(ip: std::net::IpAddr) -> bool {
     match ip {
@@ -57,6 +88,52 @@ mod tests {
         assert!(validate_path("docs/readme.md").is_ok());
         assert!(validate_path("/absolute/path/file.txt").is_ok());
         assert!(validate_path("templates/等保方案.docx").is_ok());
+    }
+
+    #[test]
+    fn test_validate_path_within_ok() {
+        let tmp_dir = std::env::temp_dir().join("smart_editor_validate_test");
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+        std::fs::create_dir_all(tmp_dir.join("subdir")).unwrap();
+        std::fs::write(tmp_dir.join("subdir/file.txt"), "hello").unwrap();
+
+        let root = tmp_dir.to_str().unwrap();
+        assert!(validate_path_within(&format!("{}/subdir/file.txt", root), root).is_ok());
+        assert!(validate_path_within(&format!("{}/file.txt", root), root).is_ok());
+
+        std::fs::remove_dir_all(&tmp_dir).unwrap();
+    }
+
+    #[test]
+    fn test_validate_path_within_outside() {
+        let tmp_dir = std::env::temp_dir().join("smart_editor_validate_test2");
+        let outside_dir = std::env::temp_dir().join("smart_editor_validate_outside");
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        let _ = std::fs::remove_dir_all(&outside_dir);
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+        std::fs::create_dir_all(&outside_dir).unwrap();
+        std::fs::write(outside_dir.join("secret.txt"), "secret").unwrap();
+
+        let root = tmp_dir.to_str().unwrap();
+        let outside_file = outside_dir.join("secret.txt").to_string_lossy().to_string();
+        assert!(validate_path_within(&outside_file, root).is_err());
+
+        std::fs::remove_dir_all(&tmp_dir).unwrap();
+        std::fs::remove_dir_all(&outside_dir).unwrap();
+    }
+
+    #[test]
+    fn test_validate_path_within_parent_dir_blocked() {
+        let tmp_dir = std::env::temp_dir().join("smart_editor_validate_test3");
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+
+        let root = tmp_dir.to_str().unwrap();
+        // ParentDir 应先被 validate_path 拦截
+        assert!(validate_path_within(&format!("{}/../secret.txt", root), root).is_err());
+
+        std::fs::remove_dir_all(&tmp_dir).unwrap();
     }
 
     #[test]

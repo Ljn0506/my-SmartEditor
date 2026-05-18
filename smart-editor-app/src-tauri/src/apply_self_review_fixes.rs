@@ -231,13 +231,13 @@ mod tests {
 
     #[test]
     fn test_apply_punctuation_fixes_copy_mode() {
-        let path = "/tmp/test_apply_fixes_copy.docx";
-        create_test_docx(path, "本方案,采用主流架构,具有高可用性。");
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let path = tmp_dir.path().join("test_apply_fixes_copy.docx").to_str().unwrap().to_string();
+        create_test_docx(&path, "本方案,采用主流架构,具有高可用性。");
 
         let issues = vec![make_issue(0, ",", "，", true)];
 
-        let result = apply_self_review_fixes(path, &issues, FixMode::Copy);
-        fs::remove_file(path).unwrap();
+        let result = apply_self_review_fixes(&path, &issues, FixMode::Copy);
 
         assert!(result.is_ok(), "修复应成功: {:?}", result.err());
         let fix_result = result.unwrap();
@@ -283,12 +283,13 @@ mod tests {
 
     #[test]
     fn test_apply_overwrite_mode_creates_backup() {
-        let path = "/tmp/test_apply_overwrite.docx";
-        create_test_docx(path, "第一段,有逗号。");
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let path = tmp_dir.path().join("test_apply_overwrite.docx").to_str().unwrap().to_string();
+        create_test_docx(&path, "第一段,有逗号。");
 
         let issues = vec![make_issue(0, ",", "，", true)];
 
-        let result = apply_self_review_fixes(path, &issues, FixMode::Overwrite);
+        let result = apply_self_review_fixes(&path, &issues, FixMode::Overwrite);
 
         assert!(result.is_ok(), "修复应成功: {:?}", result.err());
         let fix_result = result.unwrap();
@@ -303,7 +304,7 @@ mod tests {
         assert!(fs::metadata(&backup_path).is_ok(), "备份文件应存在");
 
         // 验证原文件已被覆盖（内容已修复）
-        let bytes = fs::read(path).unwrap();
+        let bytes = fs::read(&path).unwrap();
         let fixed_docx = docx_rs::read_docx(&bytes).unwrap();
         let mut fixed_text = String::new();
         for child in &fixed_docx.document.children {
@@ -321,15 +322,14 @@ mod tests {
         }
         assert!(fixed_text.contains("，"), "原文件应被覆盖为修复后内容");
 
-        // 清理
-        fs::remove_file(path).unwrap();
-        fs::remove_file(&backup_path).unwrap();
+        // tempdir 自动清理
     }
 
     #[test]
     fn test_apply_no_fixable_items() {
-        let path = "/tmp/test_no_fixes.docx";
-        create_test_docx(path, "本方案采用主流架构。");
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let path = tmp_dir.path().join("test_no_fixes.docx").to_str().unwrap().to_string();
+        create_test_docx(&path, "本方案采用主流架构。");
 
         let issues = vec![SelfReviewIssue {
             id: 1,
@@ -344,8 +344,7 @@ mod tests {
             auto_fixable: false,
         }];
 
-        let result = apply_self_review_fixes(path, &issues, FixMode::Copy);
-        fs::remove_file(path).unwrap();
+        let result = apply_self_review_fixes(&path, &issues, FixMode::Copy);
 
         assert!(result.is_err(), "无修复项时应返回 Err");
         let err = format!("{}", result.unwrap_err());
@@ -355,15 +354,16 @@ mod tests {
 
     #[test]
     fn test_apply_overwrite_mode_backup_fails() {
-        let path = "/tmp/test_apply_overwrite_fail.docx";
-        create_test_docx(path, "第一段,有逗号。");
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let path = tmp_dir.path().join("test_apply_overwrite_fail.docx").to_str().unwrap().to_string();
+        create_test_docx(&path, "第一段,有逗号。");
 
         // 创建一个与备份路径同名的目录，使 std::fs::copy 失败
-        let backup_dir = "/tmp/test_apply_overwrite_fail.bak";
-        std::fs::create_dir_all(backup_dir).unwrap();
+        let backup_dir = tmp_dir.path().join("test_apply_overwrite_fail.bak");
+        std::fs::create_dir_all(&backup_dir).unwrap();
 
         let issues = vec![make_issue(0, ",", "，", true)];
-        let result = apply_self_review_fixes(path, &issues, FixMode::Overwrite);
+        let result = apply_self_review_fixes(&path, &issues, FixMode::Overwrite);
 
         // 应返回 Err，拒绝覆盖
         assert!(result.is_err(), "备份失败时应返回错误");
@@ -375,7 +375,7 @@ mod tests {
         );
 
         // 原文件内容应保持不变
-        let bytes = std::fs::read(path).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
         let docx = docx_rs::read_docx(&bytes).unwrap();
         let mut text = String::new();
         for child in &docx.document.children {
@@ -393,9 +393,7 @@ mod tests {
         }
         assert!(text.contains(","), "原文件不应被覆盖");
 
-        // 清理
-        std::fs::remove_file(path).unwrap();
-        std::fs::remove_dir(backup_dir).unwrap();
+        // tempdir 自动清理
     }
     #[test]
     fn test_apply_doc_not_supported() {
