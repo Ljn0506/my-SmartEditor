@@ -1190,8 +1190,6 @@ mod tests {
         assert_eq!(content, "纯正文内容，没有风险标签");
     }
 
-    // ========== AI Client HTTP Mock 测试（2.14）==========
-
     #[tokio::test]
     async fn test_chat_post_json_success() {
         let mock_server = wiremock::MockServer::start().await;

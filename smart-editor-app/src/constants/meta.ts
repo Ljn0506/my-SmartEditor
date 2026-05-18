@@ -1,8 +1,3 @@
-/**
- * 共享状态/严重度元数据常量
- * 提取自 CheckResultsPanel、DeviationPanel、PunctuationPanel
- */
-
 export const STATUS_META: Record<
   string,
   { border: string; label: string; bg: string }

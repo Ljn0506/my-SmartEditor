@@ -229,6 +229,27 @@ mod tests {
         }
     }
 
+    fn extract_docx_text(path: &str) -> String {
+        let bytes = fs::read(path).unwrap();
+        let docx = docx_rs::read_docx(&bytes).unwrap();
+        let mut text = String::new();
+        for child in &docx.document.children {
+            if let docx_rs::DocumentChild::Paragraph(p) = child {
+                for para_child in &p.children {
+                    if let docx_rs::ParagraphChild::Run(r) = para_child {
+                        for run_child in &r.children {
+                            if let docx_rs::RunChild::Text(t) = run_child {
+                                text.push_str(&t.text);
+                            }
+                        }
+                    }
+                }
+                text.push('\n');
+            }
+        }
+        text
+    }
+
     #[test]
     fn test_apply_punctuation_fixes_copy_mode() {
         let tmp_dir = tempfile::tempdir().unwrap();
@@ -250,23 +271,7 @@ mod tests {
         assert_eq!(fix_result.changes[0].modified, "，");
 
         // 验证修复后的文件内容
-        let bytes = fs::read(&fix_result.output_path).unwrap();
-        let fixed_docx = docx_rs::read_docx(&bytes).unwrap();
-        let mut fixed_text = String::new();
-        for child in &fixed_docx.document.children {
-            if let docx_rs::DocumentChild::Paragraph(p) = child {
-                for para_child in &p.children {
-                    if let docx_rs::ParagraphChild::Run(r) = para_child {
-                        for run_child in &r.children {
-                            if let docx_rs::RunChild::Text(t) = run_child {
-                                fixed_text.push_str(&t.text);
-                            }
-                        }
-                    }
-                }
-                fixed_text.push('\n');
-            }
-        }
+        let fixed_text = extract_docx_text(&fix_result.output_path);
         fs::remove_file(&fix_result.output_path).unwrap();
 
         assert!(
@@ -304,22 +309,7 @@ mod tests {
         assert!(fs::metadata(&backup_path).is_ok(), "备份文件应存在");
 
         // 验证原文件已被覆盖（内容已修复）
-        let bytes = fs::read(&path).unwrap();
-        let fixed_docx = docx_rs::read_docx(&bytes).unwrap();
-        let mut fixed_text = String::new();
-        for child in &fixed_docx.document.children {
-            if let docx_rs::DocumentChild::Paragraph(p) = child {
-                for para_child in &p.children {
-                    if let docx_rs::ParagraphChild::Run(r) = para_child {
-                        for run_child in &r.children {
-                            if let docx_rs::RunChild::Text(t) = run_child {
-                                fixed_text.push_str(&t.text);
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        let fixed_text = extract_docx_text(&path);
         assert!(fixed_text.contains("，"), "原文件应被覆盖为修复后内容");
 
         // tempdir 自动清理
@@ -375,22 +365,7 @@ mod tests {
         );
 
         // 原文件内容应保持不变
-        let bytes = std::fs::read(&path).unwrap();
-        let docx = docx_rs::read_docx(&bytes).unwrap();
-        let mut text = String::new();
-        for child in &docx.document.children {
-            if let docx_rs::DocumentChild::Paragraph(p) = child {
-                for para_child in &p.children {
-                    if let docx_rs::ParagraphChild::Run(r) = para_child {
-                        for run_child in &r.children {
-                            if let docx_rs::RunChild::Text(t) = run_child {
-                                text.push_str(&t.text);
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        let text = extract_docx_text(&path);
         assert!(text.contains(","), "原文件不应被覆盖");
 
         // tempdir 自动清理

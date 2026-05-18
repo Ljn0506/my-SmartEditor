@@ -54,30 +54,40 @@ fn find_phase_root(components: &[String]) -> Option<usize> {
     None
 }
 
+fn map_dir_to_module(dir: &str) -> Option<ContentModule> {
+    match dir {
+        "技术方案" => Some(ContentModule::TechnicalProposal),
+        "商务条款" | "商务模板" => Some(ContentModule::BusinessTerms),
+        "实施计划" => Some(ContentModule::ImplementationPlan),
+        "偏离说明" => Some(ContentModule::DeviationExplanation),
+        "资质证明" => Some(ContentModule::QualificationProof),
+        "投标应答" => Some(ContentModule::BidResponse),
+        "案例介绍" => Some(ContentModule::CaseIntroduction),
+        "产品资料" => Some(ContentModule::ProductMaterial),
+        _ => None,
+    }
+}
+
 /// 路径推断：一级目录 → ProjectPhase
-fn infer_project_phase_from_path(components: &[String]) -> Option<ProjectPhase> {
-    find_phase_root(components).and_then(|idx| {
+fn infer_project_phase_from_path(components: &[String], root_idx: Option<usize>) -> Option<ProjectPhase> {
+    root_idx.and_then(|idx| {
         match components.get(idx)?.as_str() {
             "方案阶段" => Some(ProjectPhase::Proposal),
             "投标阶段" => Some(ProjectPhase::Bidding),
             "合同阶段" => Some(ProjectPhase::Contract),
-            "通用素材" => None, // 通用素材不对应具体项目阶段
+            "通用素材" => None,
             _ => None,
         }
     })
 }
 
 /// 路径推断：二级目录 → BusinessDomain
-fn infer_business_domain_from_path(components: &[String]) -> Option<BusinessDomain> {
-    let root_idx = find_phase_root(components)?;
-    let root = components.get(root_idx)?.as_str();
-
-    // 通用素材：不通过路径推断业务领域
-    if root == "通用素材" {
+fn infer_business_domain_from_path(components: &[String], root_idx: Option<usize>) -> Option<BusinessDomain> {
+    let idx = root_idx?;
+    if components.get(idx)? == "通用素材" {
         return None;
     }
-
-    components.get(root_idx + 1).and_then(|dir| match dir.as_str() {
+    components.get(idx + 1).and_then(|dir| match dir.as_str() {
         "网络安全" => Some(BusinessDomain::NetworkSecurity),
         "应用安全" => Some(BusinessDomain::ApplicationSecurity),
         "数据安全" => Some(BusinessDomain::DataSecurity),
@@ -88,35 +98,10 @@ fn infer_business_domain_from_path(components: &[String]) -> Option<BusinessDoma
 }
 
 /// 路径推断：三级目录（标准结构）或二级目录（通用素材）→ ContentModule
-fn infer_content_module_from_path(components: &[String]) -> Option<ContentModule> {
-    let root_idx = find_phase_root(components)?;
-    let root = components.get(root_idx)?.as_str();
-
-    match root {
-        "通用素材" => {
-            // 通用素材：一级目录下直接是内容模块分类
-            components.get(root_idx + 1).and_then(|dir| match dir.as_str() {
-                "资质证明" => Some(ContentModule::QualificationProof),
-                "案例介绍" => Some(ContentModule::CaseIntroduction),
-                "产品资料" => Some(ContentModule::ProductMaterial),
-                "商务模板" => Some(ContentModule::BusinessTerms),
-                _ => None,
-            })
-        }
-        _ => {
-            // 标准三级目录：一级(阶段) → 二级(领域) → 三级(模块)
-            components.get(root_idx + 2).and_then(|dir| match dir.as_str() {
-                "技术方案" => Some(ContentModule::TechnicalProposal),
-                "商务条款" => Some(ContentModule::BusinessTerms),
-                "实施计划" => Some(ContentModule::ImplementationPlan),
-                "偏离说明" => Some(ContentModule::DeviationExplanation),
-                "资质证明" => Some(ContentModule::QualificationProof),
-                "投标应答" => Some(ContentModule::BidResponse),
-                "案例介绍" => Some(ContentModule::CaseIntroduction),
-                _ => None,
-            })
-        }
-    }
+fn infer_content_module_from_path(components: &[String], root_idx: Option<usize>) -> Option<ContentModule> {
+    let idx = root_idx?;
+    let offset = if components.get(idx)? == "通用素材" { 1 } else { 2 };
+    components.get(idx + offset).and_then(|dir| map_dir_to_module(dir))
 }
 
 /// 文件名前缀推断：【xxx】→ DocAttr
@@ -137,8 +122,7 @@ fn infer_doc_attr_from_prefix(file_name: &str) -> Option<DocAttr> {
 }
 
 /// 文件名关键词推断（fallback）
-fn infer_doc_attr_from_keywords(file_name: &str) -> Option<DocAttr> {
-    let lower = file_name.to_lowercase();
+fn infer_doc_attr_from_keywords(lower: &str) -> Option<DocAttr> {
     if lower.contains("投标") || lower.contains("应答") {
         Some(DocAttr::BidResponse)
     } else if lower.contains("技术方案") || lower.contains("设计方案") {
@@ -169,6 +153,22 @@ fn infer_security_layer(file_name: &str) -> Option<SecurityLayer> {
 
 /// 根据文件路径和文件名推断文档的多维分类属性
 /// v1.0 规范：路径推断（优先级最高）→ 文件名前缀推断 → 文件名关键词推断
+const DOMAIN_KEYWORDS: &[(&[&str], BusinessDomain)] = &[
+    (&["等保", "等级保护"], BusinessDomain::NetworkSecurity),
+    (&["渗透", "漏洞", "代码审计"], BusinessDomain::ApplicationSecurity),
+    (&["数据", "数据库", "隐私"], BusinessDomain::DataSecurity),
+    (&["soc", "运营", "态势"], BusinessDomain::SecurityOperation),
+    (&["管理", "制度", "体系"], BusinessDomain::SecurityManagement),
+];
+
+const MODULE_KEYWORDS: &[(&[&str], ContentModule)] = &[
+    (&["偏离", "差异"], ContentModule::DeviationExplanation),
+    (&["资质", "证书", "业绩"], ContentModule::QualificationProof),
+    (&["案例", "项目经历"], ContentModule::CaseIntroduction),
+    (&["实施", "计划", "进度"], ContentModule::ImplementationPlan),
+    (&["商务", "报价", "合同"], ContentModule::BusinessTerms),
+];
+
 #[allow(clippy::type_complexity)]
 pub fn infer_categories(
     file_path: &str,
@@ -182,19 +182,21 @@ pub fn infer_categories(
     Option<SecurityLayer>,
 ) {
     let components = path_components(file_path);
-    let is_generic = components
-        .get(find_phase_root(&components).unwrap_or(0))
+    let root_idx = find_phase_root(&components);
+    let file_name_lower = file_name.to_lowercase();
+    let is_generic = root_idx
+        .and_then(|idx| components.get(idx))
         .map(|c| c == "通用素材")
         .unwrap_or(false);
 
     // 1. 路径推断（优先级最高）
-    let project_phase = infer_project_phase_from_path(&components);
-    let business_domain = infer_business_domain_from_path(&components);
-    let content_module = infer_content_module_from_path(&components);
+    let project_phase = infer_project_phase_from_path(&components, root_idx);
+    let business_domain = infer_business_domain_from_path(&components, root_idx);
+    let content_module = infer_content_module_from_path(&components, root_idx);
 
     // 2. 文件名前缀推断（fallback for DocAttr）
     let doc_attr = infer_doc_attr_from_prefix(file_name)
-        .or_else(|| infer_doc_attr_from_keywords(file_name));
+        .or_else(|| infer_doc_attr_from_keywords(&file_name_lower));
 
     // 3. 安全层级标注
     let security_layer = infer_security_layer(file_name);
@@ -204,7 +206,7 @@ pub fn infer_categories(
         Some(ContentModule::TechnicalProposal) => Some(DocAttr::TechnicalProposal),
         Some(ContentModule::ImplementationPlan) => Some(DocAttr::ImplementationPlan),
         Some(ContentModule::BidResponse) => Some(DocAttr::BidResponse),
-        Some(ContentModule::ProductMaterial) => Some(DocAttr::TechnicalProposal), // 产品资料 → 技术方案
+        Some(ContentModule::ProductMaterial) => Some(DocAttr::TechnicalProposal),
         _ => None,
     });
 
@@ -216,40 +218,20 @@ pub fn infer_categories(
         business_domain
     } else {
         business_domain.or_else(|| {
-            let lower = file_name.to_lowercase();
-            if lower.contains("等保") || lower.contains("等级保护") {
-                Some(BusinessDomain::NetworkSecurity)
-            } else if lower.contains("渗透") || lower.contains("漏洞") || lower.contains("代码审计")
-            {
-                Some(BusinessDomain::ApplicationSecurity)
-            } else if lower.contains("数据") || lower.contains("数据库") || lower.contains("隐私")
-            {
-                Some(BusinessDomain::DataSecurity)
-            } else if lower.contains("soc") || lower.contains("运营") || lower.contains("态势") {
-                Some(BusinessDomain::SecurityOperation)
-            } else if lower.contains("管理") || lower.contains("制度") || lower.contains("体系") {
-                Some(BusinessDomain::SecurityManagement)
-            } else {
-                Some(BusinessDomain::NetworkSecurity)
-            }
+            DOMAIN_KEYWORDS
+                .iter()
+                .find(|(kws, _)| kws.iter().any(|kw| file_name_lower.contains(kw)))
+                .map(|(_, domain)| *domain)
+                .or(Some(BusinessDomain::NetworkSecurity))
         })
     };
 
     let content_module = content_module.or_else(|| {
-        let lower = file_name.to_lowercase();
-        if lower.contains("偏离") || lower.contains("差异") {
-            Some(ContentModule::DeviationExplanation)
-        } else if lower.contains("资质") || lower.contains("证书") || lower.contains("业绩") {
-            Some(ContentModule::QualificationProof)
-        } else if lower.contains("案例") || lower.contains("项目经历") {
-            Some(ContentModule::CaseIntroduction)
-        } else if lower.contains("实施") || lower.contains("计划") || lower.contains("进度") {
-            Some(ContentModule::ImplementationPlan)
-        } else if lower.contains("商务") || lower.contains("报价") || lower.contains("合同") {
-            Some(ContentModule::BusinessTerms)
-        } else {
-            Some(ContentModule::TechnicalProposal)
-        }
+        MODULE_KEYWORDS
+            .iter()
+            .find(|(kws, _)| kws.iter().any(|kw| file_name_lower.contains(kw)))
+            .map(|(_, module)| *module)
+            .or(Some(ContentModule::TechnicalProposal))
     });
 
     (
