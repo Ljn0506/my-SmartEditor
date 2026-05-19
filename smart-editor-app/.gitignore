@@ -17,3 +17,6 @@ npm-debug.log*
 
 # Local database
 src-tauri/data.db
+
+# E2E test artifacts
+e2e-*.png

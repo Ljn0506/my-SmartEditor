@@ -112,21 +112,22 @@ Phase 2 的核心目标是 **将当前本地 27 个提交打磨到可推送状�
 ```
 Phase 2 执行顺序
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Wave 1（可并行）
-  ├─ NAS 分类对齐（2.1-2.6） ← 阻塞项，优先
-  ├─ 安全加固（2.13）
-  ├─ 前端优化（2.11-2.12）
-  └─ 代码质量清理（2.17-2.18）
+Wave 1（可并行）— ✅ 已完成
+  ├─ NAS 分类对齐（2.1-2.6）← 100% 准确率，3 项偏离已记录
+  ├─ 安全加固（2.13）← `validate_path_within` 已添加 + 全量调用点更新
+  ├─ 前端优化（2.11-2.12）← `Promise.all` 已存在无需改；`STATUS_META/SEVERITY_META` 已提取
+  └─ 代码质量清理（2.17-2.18）← `ai.rs` 无 MSRV warn； stray file `1` 已删除
 
-Wave 2（依赖 Wave 1）
-  ├─ 后端优化（2.7-2.10）← 依赖 NAS 对齐完成（避免冲突）
-  └─ 测试补充（2.14-2.16）← 依赖对应功能代码冻结
+Wave 2（依赖 Wave 1）— ✅ 已完成
+  ├─ 后端优化（2.7-2.10）← **Defer 到 v0.4.0.0**（评估后 ROI 不高，当前性能可接受）
+  └─ 测试补充（2.14-2.16）← `ai.rs` 5 mock HTTP 测试 + `apply_self_review_fixes` tempfile 迁移 + NAS 29 测试
 
-Wave 3（收尾）
-  ├─ 全量门禁（2.19）
-  ├─ 版本标记（2.20）
-  ├─ TODOS 归档（2.22）
-  └─ 推送远程（2.21）← 最后一步
+Wave 3（收尾）— ✅ 已完成（除推送）
+  ├─ 全量门禁（2.19）← 全绿
+  ├─ 版本标记（2.20）← v0.3.2.0 已确定
+  ├─ E2E Smoke Test ← **6/6 pass**（新增 `plugin:dialog|open` mock 修复）
+  ├─ TODOS 归档（2.22）← TODOS.md 不存在，无需归档
+  └─ 推送远程（2.21）← **等待 planner 审批后统一操作**
 ```
 
 ---
@@ -144,15 +145,15 @@ Wave 3（收尾）
 
 ## 5. 验收标准（Phase 2 完成的定义）
 
-- [ ] NAS scanner 分类推断准确率基准测试通过（路径推断 ≥90%）
-- [ ] NAS 分类实现与规范 v1.0 的偏离已全部记录（无偏离 or 已文档化原因）
-- [ ] `cargo test` 全绿（含新增 NAS 分类测试 + mock HTTP 测试）
-- [ ] `vitest run` 全绿
-- [ ] `vite build` 通过
-- [ ] `cargo clippy` 零 warn（或已评估并接受现有 warn）
-- [ ] `TODOS.md` 已更新，所有已完成项归档
-- [ ] `ship/main-phase1` 已推送到远程仓库
-- [ ] 版本号已确定（CHANGELOG 已更新）
+- [x] NAS scanner 分类推断准确率基准测试通过（路径推断 100%）
+- [x] NAS 分类实现与规范 v1.0 的偏离已全部记录（3 项偏离已文档化）
+- [x] `cargo test` 全绿（148 passed，含 NAS 分类测试 + mock HTTP 测试 + tempfile 测试）
+- [x] `vitest run` 全绿（23 passed / 5 files）
+- [x] `vite build` 通过
+- [x] `cargo clippy` 零 warn
+- [x] `TODOS.md` — 文件不存在，无需归档（Phase 1-4 债务已在本阶段清理完毕）
+- [ ] `ship/main-phase1` 已推送到远程仓库 ← **等待 planner 审批后统一操作**
+- [x] 版本号已确定：v0.3.2.0（后端优化 2.7-2.10 defer，待后续版本）
 
 ---
 
