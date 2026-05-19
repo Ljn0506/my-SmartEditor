@@ -2,6 +2,64 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0.0] - 2026-05-19
+
+### Added
+- Phase 1 v3 — Self-review panel fully implemented with category-based issue grouping, severity badges, and one-click fix integration
+- Phase 2 — Smart generation panel with knowledge-base retrieval, parameter placeholders (`[PARAM:xxx]`), and AI-powered consistency checks
+- Phase 3 — Multi-target document generation: technical proposal + business response dual tracks with global parameters table and cross-document consistency verification
+- Multi-file upload support (up to 3 files) with drag-and-drop and parallel parsing
+- NAS scanner classification v1.0 — path-based 4D inference (doc attr, business domain, content module, project phase), filename prefix extraction (`【投标应答】` etc.), and security level annotation (`[检测]`/`[防御]`/`[分析]`/`[治理]`)
+- `validate_path_within` utility for root-directory-scoped path traversal protection
+- Shared frontend constants module (`STATUS_META` / `SEVERITY_META`) for unified panel styling
+- AI client mock HTTP tests (5 scenarios: success / non-200 / timeout / connection refused / invalid JSON) using `wiremock`
+- `tempfile` crate integration in `apply_self_review_fixes` tests eliminating hardcoded `/tmp` dependencies
+- Playwright-based E2E test suite replacing prior tooling
+- `ContentModule` enum extended with `ProductMaterial = "产品资料"`
+
+### Changed
+- Tab structure streamlined from 5 to 4: Upload / Generate / Review / Settings
+- "Push" tab renamed to "Generate" to match v3.0 product intent
+- Template library moved from standalone frontend tab to backend knowledge-base data source
+- NAS path inference supports arbitrary root directory depth via anchor-based `find_phase_root` lookup
+- General material files (`00-通用素材/`) use independent classification logic with `ProjectPhase` and `BusinessDomain` returning `None`
+- `PunctuationPanel` severity badge styling unified with other panels
+- AI prompts now inject global parameters to reduce placeholder noise
+- `generate_card` command accepts optional `global_params` for context-aware generation
+- `save_cards` changed to UPSERT mode to prevent data loss on crash
+
+### Removed
+- `LibraryTab` frontend component (functionality fully covered by `GenerateTab`)
+- Dead code and redundant comments from `/simplify` review passes
+
+### Fixed
+- Path traversal vulnerabilities in `parser.rs`, `nas_scanner.rs`, and `utils.rs` with `ParentDir` detection + root-directory scoping
+- SSRF protection for AI base URL validation: block private IP ranges (127.0.0.0/8, 10.0.0.0/8, etc.), DNS rebinding, and non-HTTP(S) protocols
+- `std::sync::Mutex` replaced with `tokio::sync::Mutex` in async Tauri commands to prevent executor blocking
+- One-click fix global-replace over-correction changed to `replacen(..., 1)` for precise single-target replacement
+- Overwrite backup protection in self-review fixes — refuses to overwrite if backup creation fails
+- AI timeout graceful degradation with explicit user-facing error messages and configurable timeouts
+- `is_same_unit` substring matching bug causing false positives in deviation check
+- `db.rs` `ALTER TABLE` silent failure on schema migration edge cases
+- Empty-string match causing failed-file misclassification in parser
+- Generate button unresponsiveness, requirement extraction, and drag-drop upload bugs
+- AI client hardcoded timeout and blocking DNS resolved with async timeout + connection pooling
+
+### Security
+- API key masking in settings (returns `****` instead of partial reveal)
+- Prompt boundary separators to prevent AI output injection into structured parsing
+- `get_ai_config` no longer exposes raw API key to frontend
+- File size and line count limits in `parser.rs` to prevent DoS via oversized documents
+
+### Testing
+- Rust unit test count increased from 112 → 149 (37 new tests: 29 category inference + 5 AI mock + 3 path validation)
+- Frontend test count: 23 passed across 5 test files
+- Playwright E2E tests added for critical user flows
+
+### Infrastructure
+- agtalk multi-agent collaboration setup documented in `AGENTS.md`
+- `.gstack` session directory added to `.gitignore`
+
 ## [0.3.2.0] - 2026-05-18
 
 ### Added
