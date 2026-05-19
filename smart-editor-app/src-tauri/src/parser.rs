@@ -72,7 +72,13 @@ pub fn parse_document_structured(file_path: &str) -> Result<ParsedDocumentStruct
 
 /// 解析 docx，返回 (纯文本, 段落列表)
 /// 段落按 docx-rs 原始结构提取：Paragraph 和 TableRow 各为一个段落单元
+const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024; // 50MB
+
 fn parse_docx(file_path: &str) -> Result<(String, Vec<Paragraph>)> {
+    let meta = std::fs::metadata(file_path)?;
+    if meta.len() > MAX_FILE_SIZE {
+        return Err(AppError::Parse("文件超过 50MB，无法解析".to_string()));
+    }
     let bytes = std::fs::read(file_path)?;
     let docx = docx_rs::read_docx(&bytes)
         .map_err(|e| AppError::Parse(format!("docx 解析失败: {:?}", e)))?;
@@ -159,6 +165,10 @@ pub(crate) fn extract_paragraph_text_to_string(p: &docx_rs::Paragraph) -> String
 }
 
 fn parse_pdf(file_path: &str) -> Result<String> {
+    let meta = std::fs::metadata(file_path)?;
+    if meta.len() > MAX_FILE_SIZE {
+        return Err(AppError::Parse("文件超过 50MB，无法解析".to_string()));
+    }
     let text = pdf_extract::extract_text(file_path)
         .map_err(|e| AppError::Parse(format!("pdf 解析失败: {:?}", e)))?;
     Ok(text)
@@ -167,18 +177,28 @@ fn parse_pdf(file_path: &str) -> Result<String> {
 fn parse_xlsx(file_path: &str) -> Result<String> {
     use calamine::{open_workbook, Reader, Xlsx};
 
+    let meta = std::fs::metadata(file_path)?;
+    if meta.len() > MAX_FILE_SIZE {
+        return Err(AppError::Parse("文件超过 50MB，无法解析".to_string()));
+    }
+
     let mut workbook: Xlsx<_> =
         open_workbook(file_path).map_err(|e| AppError::Parse(format!("xlsx 打开失败: {:?}", e)))?;
 
     let mut text = String::new();
     let sheet_names = workbook.sheet_names().to_vec();
     let max_sheets = sheet_names.len().min(10); // 设计规格：最多前 10 个工作表
+    const MAX_ROWS_PER_SHEET: usize = 10_000;
 
     for sheet_name in &sheet_names[..max_sheets] {
         text.push_str(&format!("--- Sheet: {} ---\n", sheet_name));
         match workbook.worksheet_range(sheet_name) {
             Ok(range) => {
-                for row in range.rows() {
+                for (row_idx, row) in range.rows().enumerate() {
+                    if row_idx >= MAX_ROWS_PER_SHEET {
+                        text.push_str("... (超出最大行数限制，已截断)\n");
+                        break;
+                    }
                     let row_text: Vec<String> = row.iter().map(|c| c.to_string()).collect();
                     text.push_str(&row_text.join("\t"));
                     text.push('\n');
@@ -193,6 +213,10 @@ fn parse_xlsx(file_path: &str) -> Result<String> {
 }
 
 fn parse_txt(file_path: &str) -> Result<String> {
+    let meta = std::fs::metadata(file_path)?;
+    if meta.len() > MAX_FILE_SIZE {
+        return Err(AppError::Parse("文件超过 50MB，无法解析".to_string()));
+    }
     std::fs::read_to_string(file_path).map_err(|e| AppError::Io(e.to_string()))
 }
 

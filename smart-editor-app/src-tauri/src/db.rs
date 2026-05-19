@@ -59,14 +59,18 @@ impl Database {
             "CREATE INDEX IF NOT EXISTS idx_cards_document_target ON cards(document_target)",
             [],
         )?;
-        self.conn.execute(
+        if let Err(e) = self.conn.execute(
             "ALTER TABLE cards ADD COLUMN IF NOT EXISTS param_placeholders TEXT NOT NULL DEFAULT '[]'",
             [],
-        ).ok();
-        self.conn.execute(
+        ) {
+            log::warn!("ALTER TABLE cards ADD COLUMN param_placeholders 失败（可能已存在）: {}", e);
+        }
+        if let Err(e) = self.conn.execute(
             "ALTER TABLE cards ADD COLUMN IF NOT EXISTS risk_flags TEXT NOT NULL DEFAULT '[]'",
             [],
-        ).ok();
+        ) {
+            log::warn!("ALTER TABLE cards ADD COLUMN risk_flags 失败（可能已存在）: {}", e);
+        }
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS global_params (
                 key TEXT PRIMARY KEY,

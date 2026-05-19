@@ -12,6 +12,8 @@ pub struct AppConfig {
     pub ai_base_url: String,
     pub ai_api_key: Option<String>,
     pub ai_model: String,
+    #[serde(default)]
+    pub ai_timeout_secs: Option<u64>,
     pub meili_host: String,
     pub meili_api_key: Option<String>,
 }
@@ -23,6 +25,7 @@ impl Default for AppConfig {
             ai_base_url: "http://localhost:11434".to_string(),
             ai_api_key: None,
             ai_model: "qwen2.5:14b".to_string(),
+            ai_timeout_secs: None,
             meili_host: "http://localhost:7700".to_string(),
             meili_api_key: None,
         }
@@ -36,6 +39,7 @@ impl AppConfig {
             base_url: self.ai_base_url.clone(),
             api_key: self.ai_api_key.clone(),
             model: self.ai_model.clone(),
+            timeout_secs: self.ai_timeout_secs,
         }
     }
 
@@ -46,6 +50,7 @@ impl AppConfig {
             ai_base_url: ai.base_url.clone(),
             ai_api_key: ai.api_key.clone(),
             ai_model: ai.model.clone(),
+            ai_timeout_secs: ai.timeout_secs,
             meili_host: "http://localhost:7700".to_string(),
             meili_api_key: None,
         }
@@ -98,6 +103,7 @@ mod tests {
             ai_base_url: "https://api.anthropic.com".to_string(),
             ai_api_key: Some("sk-test".to_string()),
             ai_model: "claude-3".to_string(),
+            ai_timeout_secs: None,
             meili_host: "http://localhost:7700".to_string(),
             meili_api_key: None,
         };
@@ -119,6 +125,7 @@ mod tests {
             ai_base_url: "https://api.deepseek.com".to_string(),
             ai_api_key: Some("sk-deep".to_string()),
             ai_model: "deepseek-chat".to_string(),
+            ai_timeout_secs: None,
             meili_host: "http://localhost:7700".to_string(),
             meili_api_key: Some("master-key".to_string()),
         };

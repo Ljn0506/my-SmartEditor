@@ -8,7 +8,34 @@ pub fn validate_path(path: &str) -> Result<()> {
     if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
         return Err(AppError::Validation("非法文件路径".to_string()));
     }
+    // 阻止访问敏感系统目录（绝对路径）
+    if p.is_absolute() && is_sensitive_system_path(p) {
+        return Err(AppError::Validation("非法文件路径".to_string()));
+    }
     Ok(())
+}
+
+fn is_sensitive_system_path(p: &std::path::Path) -> bool {
+    let blocked: &[&str] = if cfg!(target_os = "windows") {
+        &[
+            "C:\\Windows",
+            "C:\\Program Files",
+            "C:\\Program Files (x86)",
+            "C:\\ProgramData",
+            "C:\\System Volume Information",
+        ]
+    } else {
+        &[
+            "/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/dev", "/proc", "/sys",
+            "/boot", "/var/log", "/System", "/private", "/.Trash",
+        ]
+    };
+    for prefix in blocked {
+        if p.starts_with(prefix) {
+            return true;
+        }
+    }
+    false
 }
 
 /// 将路径转为规范化的绝对路径（不跟随符号链接）
@@ -68,6 +95,23 @@ mod tests {
         assert!(validate_path("docs/readme.md").is_ok());
         assert!(validate_path("/absolute/path/file.txt").is_ok());
         assert!(validate_path("templates/等保方案.docx").is_ok());
+    }
+
+    #[test]
+    fn test_validate_path_blocks_system_dirs() {
+        assert!(validate_path("/etc/passwd").is_err());
+        assert!(validate_path("/usr/share/secrets").is_err());
+        assert!(validate_path("/bin/bash").is_err());
+        assert!(validate_path("/dev/sda").is_err());
+        assert!(validate_path("/proc/self/environ").is_err());
+        assert!(validate_path("/System/Library").is_err());
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn test_validate_path_blocks_windows_system_dirs() {
+        assert!(validate_path("C:\\Windows\\System32\\config\\SAM").is_err());
+        assert!(validate_path("C:\\Program Files\\secret.exe").is_err());
     }
 
     #[test]

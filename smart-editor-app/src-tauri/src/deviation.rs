@@ -532,9 +532,7 @@ fn match_numeric(
 }
 
 fn is_same_unit(a: &str, b: &str) -> bool {
-    let a = a.trim();
-    let b = b.trim();
-    a == b || a.contains(b) || b.contains(a)
+    a.trim().eq_ignore_ascii_case(b.trim())
 }
 
 #[cfg(test)]

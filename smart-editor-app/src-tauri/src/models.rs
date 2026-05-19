@@ -427,6 +427,8 @@ pub struct AiConfig {
     pub base_url: String,
     pub api_key: Option<String>,
     pub model: String,
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
 }
 
 /// 生成草稿请求（预留：AI 草稿生成功能使用）

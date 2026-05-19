@@ -34,7 +34,7 @@ pub fn apply_self_review_fixes(
         Vec<(String, String, String)>, // (original, suggestion, issue_category)
     > = std::collections::HashMap::new();
     for issue in issues {
-        if issue.auto_fixable && issue.sub_category == "punctuation" {
+        if issue.auto_fixable {
             if let (Some(idx), Some(ref orig), Some(ref sugg)) =
                 (issue.paragraph_index, issue.original.clone(), issue.suggestion.clone())
             {
@@ -189,7 +189,7 @@ fn apply_fixes_to_paragraph(
             if let docx_rs::ParagraphChild::Run(r) = para_child {
                 for run_child in &mut r.children {
                     if let docx_rs::RunChild::Text(t) = run_child {
-                        t.text = t.text.replace(orig, sugg);
+                        t.text = t.text.replacen(orig, sugg, 1);
                     }
                 }
             }
@@ -254,7 +254,7 @@ mod tests {
     fn test_apply_punctuation_fixes_copy_mode() {
         let tmp_dir = tempfile::tempdir().unwrap();
         let path = tmp_dir.path().join("test_apply_fixes_copy.docx").to_str().unwrap().to_string();
-        create_test_docx(&path, "本方案,采用主流架构,具有高可用性。");
+        create_test_docx(&path, "本方案,采用主流架构，具有高可用性。");
 
         let issues = vec![make_issue(0, ",", "，", true)];
 

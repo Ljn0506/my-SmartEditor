@@ -27,8 +27,8 @@ use crate::ai::AiClient;
 use crate::db::Database;
 use crate::desensitize::DesensitizeHit;
 use crate::models::{
-    AiConfig, DeviationReport, DocumentType, ParsedDocument, ParsedDocumentStructured, ParsedRequirements, SearchResult,
-    SelfReviewReport, Template,
+    AiConfig, AiProvider, DeviationReport, DocumentType, ParsedDocument, ParsedDocumentStructured, ParsedRequirements,
+    SearchResult, SelfReviewReport, Template,
 };
 use crate::nas_scanner::{scan_directory, ImportResult};
 use crate::search::SearchEngine;
@@ -53,12 +53,20 @@ impl AppState {
 #[tauri::command]
 fn parse_document(file_path: String) -> Result<ParsedDocumentStructured, String> {
     crate::utils::validate_path(&file_path).map_err(|e| e.to_string())?;
+    let meta = std::fs::metadata(&file_path).map_err(|e| e.to_string())?;
+    if !meta.is_file() {
+        return Err("路径不是有效的文件".to_string());
+    }
     parser::parse_document_structured(&file_path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn parse_requirement_file(file_path: String) -> Result<ParsedDocument, String> {
     crate::utils::validate_path(&file_path).map_err(|e| e.to_string())?;
+    let meta = std::fs::metadata(&file_path).map_err(|e| e.to_string())?;
+    if !meta.is_file() {
+        return Err("路径不是有效的文件".to_string());
+    }
     let text = parser::parse_document(&file_path).map_err(|e| e.to_string())?;
     let path = std::path::Path::new(&file_path);
     let file_name = path
@@ -239,11 +247,11 @@ fn update_ai_config(state: tauri::State<'_, AppState>, ai: AiConfig) -> Result<(
     app_config.ai_base_url = ai.base_url.clone();
     app_config.ai_api_key = ai.api_key.clone();
     app_config.ai_model = ai.model.clone();
+    app_config.ai_timeout_secs = ai.timeout_secs;
     config::save(&state.config_path, &app_config).map_err(|e| e.to_string())?;
     let new_ai = AiClient::new(ai).map_err(|e| e.to_string())?;
-    if let Ok(mut guard) = state.ai.lock() {
-        *guard = new_ai;
-    }
+    let mut guard = state.ai.lock().map_err(|e| e.to_string())?;
+    *guard = new_ai;
     Ok(())
 }
 
@@ -367,7 +375,7 @@ async fn import_nas_files(
         .into_iter()
         .filter(|t| {
             t.id.is_some()
-                && !failed_files.contains(t.source_file.as_ref().unwrap_or(&String::new()))
+                && t.source_file.as_ref().is_none_or(|sf| !failed_files.contains(sf))
         })
         .collect();
 
@@ -760,7 +768,17 @@ fn main() {
             let ai = AiClient::new(app_config.to_ai_config()).unwrap_or_else(|e| {
                 log::warn!("AI 客户端初始化失败（URL 校验不通过）: {}，使用默认配置重试", e);
                 let default = config::AppConfig::default();
-                AiClient::new(default.to_ai_config()).expect("默认配置也应能通过 URL 校验")
+                AiClient::new(default.to_ai_config()).unwrap_or_else(|e2| {
+                    log::warn!("默认配置也无法通过 URL 校验: {}，AI 功能将不可用，请前往设置配置有效的 AI 地址", e2);
+                    // 降级：使用公网地址创建 client（不会实际工作，但保证应用能启动）
+                    AiClient::new(AiConfig {
+                        provider: AiProvider::Ollama,
+                        base_url: "https://api.openai.com".to_string(),
+                        model: "dummy".to_string(),
+                        api_key: None,
+                        timeout_secs: None,
+                    }).expect("降级配置应合法")
+                })
             });
 
             app.manage(AppState {
@@ -857,6 +875,13 @@ mod tests {
         let res = parse_document("".to_string());
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("路径不能为空"));
+    }
+
+    #[test]
+    fn test_parse_document_blocks_system_path() {
+        let res = parse_document("/etc/passwd".to_string());
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("非法文件路径"));
     }
 
     #[test]

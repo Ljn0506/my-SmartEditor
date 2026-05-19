@@ -78,8 +78,9 @@ pub struct AiClient {
 impl AiClient {
     pub fn new(config: AiConfig) -> Result<Self> {
         validate_ai_url(&config.base_url)?;
+        let timeout = std::time::Duration::from_secs(config.timeout_secs.unwrap_or(120));
         let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
+            .timeout(timeout)
             .build()
             .unwrap_or_default();
         Ok(Self { config, http })
@@ -1206,6 +1207,7 @@ mod tests {
                 base_url: mock_server.uri(),
                 model: "test-model".to_string(),
                 api_key: Some("test-key".to_string()),
+                timeout_secs: None,
             },
             reqwest::Client::new(),
         );
@@ -1240,6 +1242,7 @@ mod tests {
                 base_url: mock_server.uri(),
                 model: "test-model".to_string(),
                 api_key: Some("test-key".to_string()),
+                timeout_secs: None,
             },
             reqwest::Client::new(),
         );
@@ -1280,6 +1283,7 @@ mod tests {
                 base_url: mock_server.uri(),
                 model: "test-model".to_string(),
                 api_key: Some("test-key".to_string()),
+                timeout_secs: None,
             },
             short_timeout_client,
         );
@@ -1310,6 +1314,7 @@ mod tests {
                 base_url: "http://127.0.0.1:65432".to_string(),
                 model: "test-model".to_string(),
                 api_key: Some("test-key".to_string()),
+                timeout_secs: None,
             },
             reqwest::Client::new(),
         );
@@ -1348,6 +1353,7 @@ mod tests {
                 base_url: mock_server.uri(),
                 model: "test-model".to_string(),
                 api_key: Some("test-key".to_string()),
+                timeout_secs: None,
             },
             reqwest::Client::new(),
         );
