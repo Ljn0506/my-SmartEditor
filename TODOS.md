@@ -9,10 +9,10 @@
 ## Backend
 
 - ~~**Priority:** P1 — Extract `validate_path` into shared utility (currently duplicated in 3 files)~~ **Completed:** v0.3.1.0 (2026-05-15)
-- **Priority:** P2 — Replace O(n*m) deviation check with HashMap-based paragraph lookup **Active:** v0.4.0.0+
-- **Priority:** P2 — Optimize self-review similarity calculation (currently O(n²) char-level LCS) **Active:** v0.4.0.0+
-- **Priority:** P2 — Add offset pagination to template search (currently capped at 1000) **Active:** v0.4.0.0+
-- **Priority:** P3 — Feature-gate heavy document parsing crates (docx-rs, pdf-extract, calamine) **Active:** v0.4.0.0+
+- ~~**Priority:** P2 — Replace O(n*m) deviation check with HashMap-based paragraph lookup~~ **Completed:** v0.4.0.1 (2026-05-20)
+- ~~**Priority:** P2 — Optimize self-review similarity calculation (currently O(n²) char-level LCS)~~ **Completed:** v0.4.0.1 (2026-05-20)
+- ~~**Priority:** P2 — Add offset pagination to template search (currently capped at 1000)~~ **Completed:** v0.4.0.1 (2026-05-20)
+- ~~**Priority:** P3 — Feature-gate heavy document parsing crates (docx-rs, pdf-extract, calamine)~~ **Completed:** v0.4.0.1 (2026-05-20)
 
 ## Security
 
