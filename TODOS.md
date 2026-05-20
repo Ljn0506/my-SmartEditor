@@ -9,10 +9,10 @@
 ## Backend
 
 - ~~**Priority:** P1 — Extract `validate_path` into shared utility (currently duplicated in 3 files)~~ **Completed:** v0.3.1.0 (2026-05-15)
-- **Priority:** P2 — Replace O(n*m) deviation check with HashMap-based paragraph lookup **Defer:** 后端优化 defer 到 v0.4.0.0+
-- **Priority:** P2 — Optimize self-review similarity calculation (currently O(n²) char-level LCS) **Defer:** 后端优化 defer 到 v0.4.0.0+
-- **Priority:** P2 — Add offset pagination to template search (currently capped at 1000) **Defer:** 后端优化 defer 到 v0.4.0.0+
-- **Priority:** P3 — Feature-gate heavy document parsing crates (docx-rs, pdf-extract, calamine) **Defer:** 后端优化 defer 到 v0.4.0.0+
+- **Priority:** P2 — Replace O(n*m) deviation check with HashMap-based paragraph lookup **Active:** v0.4.0.0+
+- **Priority:** P2 — Optimize self-review similarity calculation (currently O(n²) char-level LCS) **Active:** v0.4.0.0+
+- **Priority:** P2 — Add offset pagination to template search (currently capped at 1000) **Active:** v0.4.0.0+
+- **Priority:** P3 — Feature-gate heavy document parsing crates (docx-rs, pdf-extract, calamine) **Active:** v0.4.0.0+
 
 ## Security
 
@@ -37,3 +37,4 @@
 - **Priority:** P1 — Security hardening: `validate_path_within` scoped to allowed root directory **Completed:** v0.3.2.0 (2026-05-18)
 - **Priority:** P1 — Frontend constants extraction (STATUS_META / SEVERITY_META) **Completed:** v0.3.2.0 (2026-05-18)
 - **Priority:** P1 — Testing: AI mock HTTP tests (wiremock) + tempfile tests **Completed:** v0.3.2.0 (2026-05-18)
+- **Priority:** P0 — Ship v0.4.0.0 (Phase 1~4 rebuild, smart generation, security hardening) **Completed:** v0.4.0.0 (2026-05-20)
