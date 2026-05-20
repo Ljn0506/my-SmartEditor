@@ -202,6 +202,7 @@ pub struct TemplateFilter {
     pub keyword: Option<String>,
     #[serde(default = "default_limit")]
     pub limit: usize,
+    pub offset: Option<usize>,
 }
 
 fn default_limit() -> usize {

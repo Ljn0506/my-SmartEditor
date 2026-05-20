@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod ai;
+#[cfg(feature = "docx")]
 mod apply_self_review_fixes;
 mod category;
 mod clipboard;
@@ -188,13 +189,14 @@ async fn search_templates_meili(
     state: tauri::State<'_, AppState>,
     query: String,
     limit: Option<usize>,
+    offset: Option<usize>,
 ) -> Result<Vec<SearchResult>, String> {
     let search = state
         .search
         .as_ref()
         .ok_or("搜索服务未初始化，请检查 Meilisearch 配置")?;
     search
-        .search(&query, limit.unwrap_or(10))
+        .search(&query, limit.unwrap_or(10), offset)
         .await
         .map_err(|e| e.to_string())
 }
@@ -536,6 +538,7 @@ async fn check_self_review_async(
     Ok(report)
 }
 
+#[cfg(feature = "docx")]
 #[tauri::command]
 fn apply_self_review_fixes(
     file_path: String,
@@ -545,6 +548,16 @@ fn apply_self_review_fixes(
     crate::utils::validate_path(&file_path).map_err(|e| e.to_string())?;
     crate::apply_self_review_fixes::apply_self_review_fixes(&file_path, &issues, mode)
         .map_err(|e| e.to_string())
+}
+
+#[cfg(not(feature = "docx"))]
+#[tauri::command]
+fn apply_self_review_fixes(
+    _file_path: String,
+    _issues: Vec<crate::models::SelfReviewIssue>,
+    _mode: crate::models::FixMode,
+) -> Result<crate::models::FixResult, String> {
+    Err("docx 修复功能未启用，请使用 --features docx 编译".to_string())
 }
 
 // --- Phase 2: 智能生成命令 ---
@@ -562,7 +575,7 @@ async fn generate_outline(
         let queries: Vec<&str> = requirements_text.split_whitespace().take(5).collect();
         for q in queries {
             if q.len() >= 2 {
-                match search.search(q, 2).await {
+                match search.search(q, 2, None).await {
                     Ok(results) => {
                         for r in results {
                             if !r.content.is_empty() {
@@ -599,7 +612,7 @@ async fn generate_card(
     let mut refs: Vec<String> = vec![];
     let mut source_files: Vec<String> = vec![];
     if let Some(search) = state.search.as_ref() {
-        match search.search(&outline.title, 3).await {
+        match search.search(&outline.title, 3, None).await {
             Ok(results) => {
                 for r in results {
                     if !r.content.is_empty() {
@@ -904,6 +917,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "docx")]
     fn test_apply_self_review_fixes_blocks_path_traversal() {
         let res = apply_self_review_fixes(
             "../template.docx".to_string(),

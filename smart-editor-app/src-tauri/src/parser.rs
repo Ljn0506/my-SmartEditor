@@ -15,12 +15,27 @@ pub fn parse_document(file_path: &str) -> Result<String> {
         .unwrap_or_default();
 
     match ext.as_str() {
+        #[cfg(feature = "docx")]
         "docx" => parse_docx(file_path).map(|(text, _)| text),
+        #[cfg(not(feature = "docx"))]
+        "docx" => Err(AppError::Parse(
+            "docx 解析未启用，请使用 --features docx 编译".to_string(),
+        )),
         "doc" => Err(AppError::Parse(
             "doc 格式不支持，请转换为 .docx 后重试".to_string(),
         )),
+        #[cfg(feature = "pdf")]
         "pdf" => parse_pdf(file_path),
+        #[cfg(not(feature = "pdf"))]
+        "pdf" => Err(AppError::Parse(
+            "pdf 解析未启用，请使用 --features pdf 编译".to_string(),
+        )),
+        #[cfg(feature = "excel")]
         "xlsx" | "xls" => parse_xlsx(file_path),
+        #[cfg(not(feature = "excel"))]
+        "xlsx" | "xls" => Err(AppError::Parse(
+            "excel 解析未启用，请使用 --features excel 编译".to_string(),
+        )),
         "txt" | "md" => parse_txt(file_path),
         _ => Err(AppError::Parse(format!("不支持的文件格式: {}", ext))),
     }
@@ -38,10 +53,15 @@ pub fn parse_document_structured(file_path: &str) -> Result<ParsedDocumentStruct
         .unwrap_or_default();
 
     match ext.as_str() {
+        #[cfg(feature = "docx")]
         "docx" => {
             let (text, paragraphs) = parse_docx(file_path)?;
             Ok(ParsedDocumentStructured { text, paragraphs })
         }
+        #[cfg(not(feature = "docx"))]
+        "docx" => Err(AppError::Parse(
+            "docx 解析未启用，请使用 --features docx 编译".to_string(),
+        )),
         "doc" => Err(AppError::Parse(
             "doc 格式不支持，请转换为 .docx 后重试".to_string(),
         )),
@@ -74,6 +94,7 @@ pub fn parse_document_structured(file_path: &str) -> Result<ParsedDocumentStruct
 /// 段落按 docx-rs 原始结构提取：Paragraph 和 TableRow 各为一个段落单元
 const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024; // 50MB
 
+#[cfg(feature = "docx")]
 fn parse_docx(file_path: &str) -> Result<(String, Vec<Paragraph>)> {
     let meta = std::fs::metadata(file_path)?;
     if meta.len() > MAX_FILE_SIZE {
@@ -146,6 +167,7 @@ fn parse_docx(file_path: &str) -> Result<(String, Vec<Paragraph>)> {
     Ok((text, paragraphs))
 }
 
+#[cfg(feature = "docx")]
 pub(crate) fn extract_paragraph_text(p: &docx_rs::Paragraph, buf: &mut String) {
     for para_child in &p.children {
         if let docx_rs::ParagraphChild::Run(r) = para_child {
@@ -158,12 +180,14 @@ pub(crate) fn extract_paragraph_text(p: &docx_rs::Paragraph, buf: &mut String) {
     }
 }
 
+#[cfg(feature = "docx")]
 pub(crate) fn extract_paragraph_text_to_string(p: &docx_rs::Paragraph) -> String {
     let mut buf = String::new();
     extract_paragraph_text(p, &mut buf);
     buf
 }
 
+#[cfg(feature = "pdf")]
 fn parse_pdf(file_path: &str) -> Result<String> {
     let meta = std::fs::metadata(file_path)?;
     if meta.len() > MAX_FILE_SIZE {
@@ -174,6 +198,7 @@ fn parse_pdf(file_path: &str) -> Result<String> {
     Ok(text)
 }
 
+#[cfg(feature = "excel")]
 fn parse_xlsx(file_path: &str) -> Result<String> {
     use calamine::{open_workbook, Reader, Xlsx};
 

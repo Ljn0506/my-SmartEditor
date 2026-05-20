@@ -164,12 +164,15 @@ impl Database {
             owned_params.push(like.clone());
             owned_params.push(like);
         }
-        // LIMIT 直接嵌入 SQL（usize 来自 Rust 内部，安全）
+        // LIMIT / OFFSET 直接嵌入 SQL（usize 来自 Rust 内部，安全）
         let limit = filter.limit.min(1000);
         sql.push_str(&format!(
             " ORDER BY use_count DESC, rating DESC LIMIT {}",
             limit
         ));
+        if let Some(offset) = filter.offset {
+            sql.push_str(&format!(" OFFSET {}", offset));
+        }
 
         let param_refs: Vec<&dyn rusqlite::ToSql> = owned_params
             .iter()
@@ -528,6 +531,60 @@ mod tests {
             })
             .unwrap();
         assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn test_search_offset_pagination() {
+        let db = create_test_db();
+        for i in 0..5 {
+            let mut tmpl = sample_template();
+            tmpl.title = format!("方案{}", i);
+            db.insert_template(&mut tmpl).unwrap();
+        }
+        // offset=0 时返回前 2 条
+        let results = db
+            .search_templates(&crate::models::TemplateFilter {
+                limit: 2,
+                offset: Some(0),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].title, "方案0");
+        assert_eq!(results[1].title, "方案1");
+
+        // offset=2 时返回第 3、4 条
+        let results = db
+            .search_templates(&crate::models::TemplateFilter {
+                limit: 2,
+                offset: Some(2),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].title, "方案2");
+        assert_eq!(results[1].title, "方案3");
+
+        // offset=4 时返回第 5 条
+        let results = db
+            .search_templates(&crate::models::TemplateFilter {
+                limit: 2,
+                offset: Some(4),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "方案4");
+
+        // offset 超过总数时返回空
+        let results = db
+            .search_templates(&crate::models::TemplateFilter {
+                limit: 2,
+                offset: Some(10),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(results.len(), 0);
     }
 
     #[test]
