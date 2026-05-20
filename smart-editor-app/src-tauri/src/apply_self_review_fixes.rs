@@ -1,0 +1,380 @@
+use std::path::Path;
+
+use crate::error::{AppError, Result};
+use crate::models::{FixMode, FixResult, ParagraphChange, SelfReviewIssue};
+use crate::utils::validate_path;
+
+/// 一键修复：处理 auto_fixable=true 的问题，支持 Copy / Overwrite 两种模式
+pub fn apply_self_review_fixes(
+    file_path: &str,
+    issues: &[SelfReviewIssue],
+    mode: FixMode,
+) -> Result<FixResult> {
+    validate_path(file_path)?;
+    let path = Path::new(file_path);
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+
+    if ext != "docx" {
+        return Err(AppError::Validation(
+            "一键修复仅支持 .docx 文件".to_string(),
+        ));
+    }
+
+    let bytes = std::fs::read(file_path)?;
+    let mut docx = docx_rs::read_docx(&bytes)
+        .map_err(|e| AppError::Parse(format!("docx 解析失败: {:?}", e)))?;
+
+    // 收集需要修复的 issue，按 paragraph_index 分组
+    let mut fixes_by_para: std::collections::HashMap<
+        usize,
+        Vec<(String, String, String)>, // (original, suggestion, issue_category)
+    > = std::collections::HashMap::new();
+    for issue in issues {
+        if issue.auto_fixable {
+            if let (Some(idx), Some(ref orig), Some(ref sugg)) =
+                (issue.paragraph_index, issue.original.clone(), issue.suggestion.clone())
+            {
+                fixes_by_para
+                    .entry(idx)
+                    .or_default()
+                    .push((orig.clone(), sugg.clone(), issue.category.clone()));
+            }
+        }
+    }
+
+    if fixes_by_para.is_empty() {
+        return Err(AppError::Validation("没有可自动修复的项".to_string()));
+    }
+
+    // 遍历 docx 段落，应用修复并收集修改明细
+    let mut para_idx = 0usize;
+    let mut changes: Vec<ParagraphChange> = Vec::new();
+
+    for child in &mut docx.document.children {
+        match child {
+            docx_rs::DocumentChild::Paragraph(p) if paragraph_has_text(p) => {
+                if let Some(fixes) = fixes_by_para.get(&para_idx) {
+                    let para_text_before = crate::parser::extract_paragraph_text_to_string(p);
+                    apply_fixes_to_paragraph(p, fixes);
+                    let para_text_after = crate::parser::extract_paragraph_text_to_string(p);
+                    if para_text_before != para_text_after {
+                        for (orig, sugg, category) in fixes {
+                            changes.push(ParagraphChange {
+                                paragraph_index: para_idx,
+                                paragraph_text: para_text_before.clone(),
+                                original: orig.clone(),
+                                modified: sugg.clone(),
+                                issue_category: category.clone(),
+                            });
+                        }
+                    }
+                }
+                para_idx += 1;
+            }
+            docx_rs::DocumentChild::Table(t) => {
+                for row_child in &mut t.rows {
+                    let docx_rs::TableChild::TableRow(row) = row_child;
+                    let has_text = row.cells.iter().any(|cc| {
+                        let docx_rs::TableRowChild::TableCell(cell) = cc;
+                        cell.children.iter().any(|c| {
+                            if let docx_rs::TableCellContent::Paragraph(p) = c {
+                                paragraph_has_text(p)
+                            } else {
+                                false
+                            }
+                        })
+                    });
+
+                    if has_text {
+                        if let Some(fixes) = fixes_by_para.get(&para_idx) {
+                            // 收集表格行修改前的文本
+                            let mut para_text_before = String::new();
+                            for cell_child in &row.cells {
+                                let docx_rs::TableRowChild::TableCell(cell) = cell_child;
+                                for cell_content in &cell.children {
+                                    if let docx_rs::TableCellContent::Paragraph(p) = cell_content {
+                                        para_text_before.push_str(&crate::parser::extract_paragraph_text_to_string(p));
+                                    }
+                                }
+                            }
+                            // 应用修复
+                            for cell_child in &mut row.cells {
+                                let docx_rs::TableRowChild::TableCell(cell) = cell_child;
+                                for cell_content in &mut cell.children {
+                                    if let docx_rs::TableCellContent::Paragraph(p) = cell_content {
+                                        apply_fixes_to_paragraph(p, fixes);
+                                    }
+                                }
+                            }
+                            // 记录修改明细
+                            for (orig, sugg, category) in fixes {
+                                changes.push(ParagraphChange {
+                                    paragraph_index: para_idx,
+                                    paragraph_text: para_text_before.clone(),
+                                    original: orig.clone(),
+                                    modified: sugg.clone(),
+                                    issue_category: category.clone(),
+                                });
+                            }
+                        }
+                        para_idx += 1;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // 确定输出路径
+    let file_stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let parent = path.parent().unwrap_or(Path::new("."));
+
+    let (output_path_str, backup_path_str) = match mode {
+        FixMode::Copy => {
+            let output_path = parent.join(format!("{}_fixed.docx", file_stem));
+            (output_path.to_string_lossy().to_string(), None)
+        }
+        FixMode::Overwrite => {
+            let backup_path = parent.join(format!("{}.bak", file_stem));
+            // 尝试创建备份，失败时直接返回 Err，拒绝覆盖原文件
+            std::fs::copy(file_path, &backup_path).map_err(|e| {
+                AppError::Io(format!(
+                    "无法创建备份文件 {}，拒绝覆盖原文件: {}",
+                    backup_path.display(),
+                    e
+                ))
+            })?;
+            let backup_path_str = Some(backup_path.to_string_lossy().to_string());
+            (file_path.to_string(), backup_path_str)
+        }
+    };
+
+    // 写入文件
+    let file = std::fs::File::create(&output_path_str)?;
+    docx.build()
+        .pack(file)
+        .map_err(|e| AppError::Io(format!("docx 打包失败: {:?}", e)))?;
+
+    Ok(FixResult {
+        mode,
+        output_path: output_path_str,
+        backup_path: backup_path_str,
+        changes,
+    })
+}
+
+fn paragraph_has_text(p: &docx_rs::Paragraph) -> bool {
+    p.children.iter().any(|pc| {
+        if let docx_rs::ParagraphChild::Run(r) = pc {
+            r.children.iter().any(|rc| matches!(rc, docx_rs::RunChild::Text(_)))
+        } else {
+            false
+        }
+    })
+}
+
+fn apply_fixes_to_paragraph(
+    p: &mut docx_rs::Paragraph,
+    fixes: &[(String, String, String)],
+) {
+    for (orig, sugg, _category) in fixes {
+        for para_child in &mut p.children {
+            if let docx_rs::ParagraphChild::Run(r) = para_child {
+                for run_child in &mut r.children {
+                    if let docx_rs::RunChild::Text(t) = run_child {
+                        t.text = t.text.replacen(orig, sugg, 1);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{SelfReviewIssue, Severity};
+    use std::fs;
+
+    fn create_test_docx(path: &str, text: &str) {
+        let mut docx = docx_rs::Docx::new();
+        for line in text.lines() {
+            docx = docx.add_paragraph(
+                docx_rs::Paragraph::new().add_run(docx_rs::Run::new().add_text(line)),
+            );
+        }
+        let file = fs::File::create(path).unwrap();
+        docx.build().pack(file).unwrap();
+    }
+
+    fn make_issue(idx: usize, orig: &str, sugg: &str, auto_fixable: bool) -> SelfReviewIssue {
+        SelfReviewIssue {
+            id: 1,
+            category: "format".to_string(),
+            sub_category: "punctuation".to_string(),
+            message: "标点问题".to_string(),
+            severity: Severity::Warning,
+            position: Some(3),
+            paragraph_index: Some(idx),
+            original: Some(orig.to_string()),
+            suggestion: Some(sugg.to_string()),
+            auto_fixable,
+        }
+    }
+
+    fn extract_docx_text(path: &str) -> String {
+        let bytes = fs::read(path).unwrap();
+        let docx = docx_rs::read_docx(&bytes).unwrap();
+        let mut text = String::new();
+        for child in &docx.document.children {
+            if let docx_rs::DocumentChild::Paragraph(p) = child {
+                for para_child in &p.children {
+                    if let docx_rs::ParagraphChild::Run(r) = para_child {
+                        for run_child in &r.children {
+                            if let docx_rs::RunChild::Text(t) = run_child {
+                                text.push_str(&t.text);
+                            }
+                        }
+                    }
+                }
+                text.push('\n');
+            }
+        }
+        text
+    }
+
+    #[test]
+    fn test_apply_punctuation_fixes_copy_mode() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let path = tmp_dir.path().join("test_apply_fixes_copy.docx").to_str().unwrap().to_string();
+        create_test_docx(&path, "本方案,采用主流架构，具有高可用性。");
+
+        let issues = vec![make_issue(0, ",", "，", true)];
+
+        let result = apply_self_review_fixes(&path, &issues, FixMode::Copy);
+
+        assert!(result.is_ok(), "修复应成功: {:?}", result.err());
+        let fix_result = result.unwrap();
+        assert_eq!(fix_result.mode, FixMode::Copy);
+        assert!(fix_result.output_path.ends_with("_fixed.docx"));
+        assert!(fix_result.backup_path.is_none());
+        assert!(!fix_result.changes.is_empty(), "应返回修改明细");
+        assert_eq!(fix_result.changes[0].paragraph_index, 0);
+        assert_eq!(fix_result.changes[0].original, ",");
+        assert_eq!(fix_result.changes[0].modified, "，");
+
+        // 验证修复后的文件内容
+        let fixed_text = extract_docx_text(&fix_result.output_path);
+        fs::remove_file(&fix_result.output_path).unwrap();
+
+        assert!(
+            fixed_text.contains("，"),
+            "修复后应包含中文逗号，实际: {:?}",
+            fixed_text
+        );
+        assert!(
+            !fixed_text.contains(","),
+            "修复后不应包含英文逗号，实际: {:?}",
+            fixed_text
+        );
+    }
+
+    #[test]
+    fn test_apply_overwrite_mode_creates_backup() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let path = tmp_dir.path().join("test_apply_overwrite.docx").to_str().unwrap().to_string();
+        create_test_docx(&path, "第一段,有逗号。");
+
+        let issues = vec![make_issue(0, ",", "，", true)];
+
+        let result = apply_self_review_fixes(&path, &issues, FixMode::Overwrite);
+
+        assert!(result.is_ok(), "修复应成功: {:?}", result.err());
+        let fix_result = result.unwrap();
+        assert_eq!(fix_result.mode, FixMode::Overwrite);
+        assert_eq!(fix_result.output_path, path);
+        assert!(
+            fix_result.backup_path.is_some(),
+            "应生成备份文件"
+        );
+        let backup_path = fix_result.backup_path.unwrap();
+        assert!(backup_path.ends_with(".bak"));
+        assert!(fs::metadata(&backup_path).is_ok(), "备份文件应存在");
+
+        // 验证原文件已被覆盖（内容已修复）
+        let fixed_text = extract_docx_text(&path);
+        assert!(fixed_text.contains("，"), "原文件应被覆盖为修复后内容");
+
+        // tempdir 自动清理
+    }
+
+    #[test]
+    fn test_apply_no_fixable_items() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let path = tmp_dir.path().join("test_no_fixes.docx").to_str().unwrap().to_string();
+        create_test_docx(&path, "本方案采用主流架构。");
+
+        let issues = vec![SelfReviewIssue {
+            id: 1,
+            category: "format".to_string(),
+            sub_category: "placeholder".to_string(),
+            message: "占位符".to_string(),
+            severity: Severity::Error,
+            position: None,
+            paragraph_index: None,
+            original: Some("[待补充]".to_string()),
+            suggestion: Some("请替换".to_string()),
+            auto_fixable: false,
+        }];
+
+        let result = apply_self_review_fixes(&path, &issues, FixMode::Copy);
+
+        assert!(result.is_err(), "无修复项时应返回 Err");
+        let err = format!("{}", result.unwrap_err());
+        assert!(err.contains("没有可自动修复的项"), "错误消息应提示无修复项");
+    }
+
+
+    #[test]
+    fn test_apply_overwrite_mode_backup_fails() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let path = tmp_dir.path().join("test_apply_overwrite_fail.docx").to_str().unwrap().to_string();
+        create_test_docx(&path, "第一段,有逗号。");
+
+        // 创建一个与备份路径同名的目录，使 std::fs::copy 失败
+        let backup_dir = tmp_dir.path().join("test_apply_overwrite_fail.bak");
+        std::fs::create_dir_all(&backup_dir).unwrap();
+
+        let issues = vec![make_issue(0, ",", "，", true)];
+        let result = apply_self_review_fixes(&path, &issues, FixMode::Overwrite);
+
+        // 应返回 Err，拒绝覆盖
+        assert!(result.is_err(), "备份失败时应返回错误");
+        let err = format!("{}", result.unwrap_err());
+        assert!(
+            err.contains("无法创建备份文件") && err.contains("拒绝覆盖原文件"),
+            "错误信息应提示备份失败并拒绝覆盖: {}",
+            err
+        );
+
+        // 原文件内容应保持不变
+        let text = extract_docx_text(&path);
+        assert!(text.contains(","), "原文件不应被覆盖");
+
+        // tempdir 自动清理
+    }
+    #[test]
+    fn test_apply_doc_not_supported() {
+        let result = apply_self_review_fixes("test.doc", &[], FixMode::Copy);
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(err.contains("仅支持 .docx"), "应提示仅支持 docx");
+    }
+}

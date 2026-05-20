@@ -1,0 +1,153 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+## [0.4.0.0] - 2026-05-19
+
+### Added
+- Phase 1 v3 — Self-review panel fully implemented with category-based issue grouping, severity badges, and one-click fix integration
+- Phase 2 — Smart generation panel with knowledge-base retrieval, parameter placeholders (`[PARAM:xxx]`), and AI-powered consistency checks
+- Phase 3 — Multi-target document generation: technical proposal + business response dual tracks with global parameters table and cross-document consistency verification
+- Multi-file upload support (up to 3 files) with drag-and-drop and parallel parsing
+- NAS scanner classification v1.0 — path-based 4D inference (doc attr, business domain, content module, project phase), filename prefix extraction (`【投标应答】` etc.), and security level annotation (`[检测]`/`[防御]`/`[分析]`/`[治理]`)
+- `validate_path_within` utility for root-directory-scoped path traversal protection
+- Shared frontend constants module (`STATUS_META` / `SEVERITY_META`) for unified panel styling
+- AI client mock HTTP tests (5 scenarios: success / non-200 / timeout / connection refused / invalid JSON) using `wiremock`
+- `tempfile` crate integration in `apply_self_review_fixes` tests eliminating hardcoded `/tmp` dependencies
+- Playwright-based E2E test suite replacing prior tooling
+- `ContentModule` enum extended with `ProductMaterial = "产品资料"`
+
+### Changed
+- Tab structure streamlined from 5 to 4: Upload / Generate / Review / Settings
+- "Push" tab renamed to "Generate" to match v3.0 product intent
+- Template library moved from standalone frontend tab to backend knowledge-base data source
+- NAS path inference supports arbitrary root directory depth via anchor-based `find_phase_root` lookup
+- General material files (`00-通用素材/`) use independent classification logic with `ProjectPhase` and `BusinessDomain` returning `None`
+- `PunctuationPanel` severity badge styling unified with other panels
+- AI prompts now inject global parameters to reduce placeholder noise
+- `generate_card` command accepts optional `global_params` for context-aware generation
+- `save_cards` changed to UPSERT mode to prevent data loss on crash
+
+### Removed
+- `LibraryTab` frontend component (functionality fully covered by `GenerateTab`)
+- Dead code and redundant comments from `/simplify` review passes
+
+### Fixed
+- Path traversal vulnerabilities in `parser.rs`, `nas_scanner.rs`, and `utils.rs` with `ParentDir` detection + root-directory scoping
+- SSRF protection for AI base URL validation: block private IP ranges (127.0.0.0/8, 10.0.0.0/8, etc.), DNS rebinding, and non-HTTP(S) protocols
+- `std::sync::Mutex` replaced with `tokio::sync::Mutex` in async Tauri commands to prevent executor blocking
+- One-click fix global-replace over-correction changed to `replacen(..., 1)` for precise single-target replacement
+- Overwrite backup protection in self-review fixes — refuses to overwrite if backup creation fails
+- AI timeout graceful degradation with explicit user-facing error messages and configurable timeouts
+- `is_same_unit` substring matching bug causing false positives in deviation check
+- `db.rs` `ALTER TABLE` silent failure on schema migration edge cases
+- Empty-string match causing failed-file misclassification in parser
+- Generate button unresponsiveness, requirement extraction, and drag-drop upload bugs
+- AI client hardcoded timeout and blocking DNS resolved with async timeout + connection pooling
+
+### Security
+- API key masking in settings (returns `****` instead of partial reveal)
+- Prompt boundary separators to prevent AI output injection into structured parsing
+- `get_ai_config` no longer exposes raw API key to frontend
+- File size and line count limits in `parser.rs` to prevent DoS via oversized documents
+
+### Testing
+- Rust unit test count increased from 112 → 149 (37 new tests: 29 category inference + 5 AI mock + 3 path validation)
+- Frontend test count: 23 passed across 5 test files
+- Playwright E2E tests added for critical user flows
+
+### Infrastructure
+- agtalk multi-agent collaboration setup documented in `AGENTS.md`
+- `.gstack` session directory added to `.gitignore`
+
+## [0.3.2.0] - 2026-05-18
+
+### Added
+- NAS scanner classification v1.0 alignment with knowledge base spec — path inference (3-level directory → 4D classification), filename prefix extraction (`【投标应答】` etc.), security level annotation (`[检测]`/`[防御]`/`[分析]`/`[治理]`)
+- `validate_path_within` function to scope path validation to allowed root directory (double-layer protection with existing `ParentDir` check)
+- Shared frontend constants module (`src/constants/meta.ts`) exporting `STATUS_META` / `SEVERITY_META` — unified across `CheckResultsPanel`, `DeviationPanel`, `PunctuationPanel`
+- AI client mock HTTP tests (5 scenarios: success / non-200 / timeout / connection refused / invalid JSON) using `wiremock`
+- `tempfile` crate integration in `apply_self_review_fixes` tests — eliminates 5 hardcoded `/tmp` path dependencies
+- `ContentModule` enum extended with `ProductMaterial = "产品资料"` for general material classification
+
+### Changed
+- NAS path inference now supports arbitrary root directory depth via anchor-based `find_phase_root` lookup (previously assumed fixed depth)
+- General material files (`00-通用素材/`) use independent classification logic with `ProjectPhase` and `BusinessDomain` returning `None`
+- `PunctuationPanel` severity badge styling unified with other panels (`border-red-200` added to `Error` level)
+
+### Testing
+- Rust unit test count increased from 112 → 149 (37 new tests: 29 category inference + 5 AI mock + 3 path validation)
+- Frontend test count: 23 passed across 5 test files
+
+### Security
+- Path traversal protection extended with root-directory scoping in `parser.rs`, `nas_scanner.rs`, and `utils.rs`
+
+## [0.3.0.0] - 2026-05-11
+
+### Added
+- Multi-target document generation: technical proposal + business response dual tracks
+- Global parameters table for cross-document consistency (project name, client, contract amount, delivery days, etc.)
+- Cross-document consistency check via AI — detects parameter mismatches across technical and business cards
+- Risk flags on business cards (auto-generated by AI) with visual badge indicators
+- Mandatory per-card review for business cards — bulk confirmation is blocked
+- Knowledge-base retrieval integrated into generate flow (auto-search relevant templates per chapter)
+- Parameter placeholders (`[PARAM:xxx]`) in generated chapter cards with inline fill UI
+- Card status lifecycle: draft → confirmed → rejected, with persistence per document target
+
+### Changed
+- Tab structure streamlined from 5 to 4: Upload / Generate / Review / Settings
+- "Push" tab renamed to "Generate" to match v3.0 product intent
+- Template library moved from standalone frontend tab to backend knowledge-base data source
+- AI prompts now inject global parameters to reduce placeholder noise
+- `generate_card` command accepts optional `global_params` for context-aware generation
+
+### Removed
+- LibraryTab frontend component (functionality fully covered by GenerateTab)
+
+### Fixed
+- SSRF protection for AI base URL validation with blocklist for private IP ranges
+- Path traversal validation added to NAS scanner and document parser
+- Overwrite backup protection in self-review fixes (prevents data loss on backup failure)
+- AI timeout graceful degradation with explicit user-facing error messages
+- `save_cards` changed to UPSERT mode to prevent data loss on crash
+
+### Security
+- API key masking in settings (returns `****` instead of partial reveal)
+- Prompt boundary separators to prevent AI output injection into structured parsing
+- `get_ai_config` no longer exposes raw API key to frontend
+
+## [0.2.0.0] - 2026-05-06
+
+### Added
+- Complete Tauri v2 desktop app with Rust backend + React/TypeScript frontend
+- Smart document editor with Tiptap rich text editing
+- Template library with 4D classification (doc attr, business domain, content module, project phase)
+- NAS directory scanner for importing templates with auto-categorization
+- Deviation checking between bid documents and requirement documents
+- Punctuation checking for Chinese document standards
+- Self-review engine for local checks (repetition, sensitive info, placeholders)
+- AI-powered contradiction and context-logic detection
+- Document parser supporting DOCX, PDF, XLSX, TXT, and Markdown
+- Meilisearch integration for full-text template search
+- SQLite database for local template storage
+- Desensitization engine for privacy data masking
+- Clipboard export with HTML and plain text formats
+- Check results panel with deviation report visualization
+- Requirements context provider for cross-tab state management
+
+### Changed
+- Parallelized deviation/risk/self-review checks for faster response
+- Converted CPU-bound sync commands to async spawn_blocking
+
+### Fixed
+- Path traversal vulnerability in document parser (ParentDir detection)
+- XSS vulnerability in template preview (DOMPurify sanitization)
+- Brace-counting JSON parser for nested objects with escaped quotes
+- Unknown severity fallback with proper logging in AI review items
+- ID validation for scoring criteria and commitment items
+
+### Infrastructure
+- Vitest + React Testing Library test suite
+- 71 Rust unit tests + 10 frontend component tests
+- CI workflow with automated testing
+- agtalk multi-agent collaboration setup

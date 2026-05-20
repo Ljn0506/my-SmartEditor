@@ -1,10 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   Upload,
-  Library,
   Sparkles,
   SearchCheck,
   Settings,
@@ -12,20 +11,22 @@ import {
   ClipboardCopy,
 } from "lucide-react";
 import TiptapEditor from "./components/TiptapEditor";
-import LibraryTab from "./components/LibraryTab";
-import DeviationPanel, {
+import GenerateTab from "./components/GenerateTab";
+import { RequirementsProvider } from "./contexts/RequirementsContext";
+import CheckResultsPanel, {
   type DeviationReport,
   type FatalRisk,
-} from "./components/DeviationPanel";
-import PunctuationPanel, { type PunctuationIssue } from "./components/PunctuationPanel";
+} from "./components/CheckResultsPanel";
+
+
+import { useRequirements } from "./contexts/RequirementsContext";
 
 // 标签页类型
-type TabKey = "upload" | "library" | "push" | "check" | "settings";
+type TabKey = "upload" | "generate" | "check" | "settings";
 
 const tabs: { key: TabKey; label: string; icon: React.ReactNode }[] = [
   { key: "upload", label: "需求上传", icon: <Upload size={16} /> },
-  { key: "library", label: "模板库", icon: <Library size={16} /> },
-  { key: "push", label: "智能推送", icon: <Sparkles size={16} /> },
+  { key: "generate", label: "智能生成", icon: <Sparkles size={16} /> },
   { key: "check", label: "校对", icon: <SearchCheck size={16} /> },
   { key: "settings", label: "设置", icon: <Settings size={16} /> },
 ];
@@ -75,6 +76,7 @@ function App() {
   };
 
   return (
+    <RequirementsProvider>
     <div className="flex flex-col h-screen bg-gray-50 text-gray-800">
       {/* 顶部标签栏 */}
       <header className="bg-white border-b border-gray-200 px-4 py-2 flex items-center gap-1 shadow-sm shrink-0">
@@ -97,34 +99,38 @@ function App() {
 
       {/* 主内容区：左右分栏 */}
       <main className="flex-1 flex overflow-hidden">
-        {/* 左侧功能面板 */}
-        <div className="w-[45%] min-w-[360px] max-w-[560px] flex flex-col border-r border-gray-200 bg-white">
-          <div className="flex-1 overflow-auto">
-            {activeTab === "upload" && <UploadTab />}
-            {activeTab === "library" && <LibraryTab editor={editor} />}
-            {activeTab === "push" && <PushTab />}
-            {activeTab === "check" && <CheckTab editor={editor} />}
-            {activeTab === "settings" && <SettingsTab />}
-          </div>
-        </div>
+        {activeTab === "check" ? (
+          <CheckTabFullScreen />
+        ) : (
+          <>
+            {/* 左侧功能面板 */}
+            <div className="w-[45%] min-w-[360px] max-w-[560px] flex flex-col border-r border-gray-200 bg-white">
+              <div className="flex-1 overflow-auto">
+                {activeTab === "upload" && <UploadTab />}
+                {activeTab === "generate" && <GenerateTab onNavigateToCheck={() => setActiveTab("check")} />}
+                {activeTab === "settings" && <SettingsTab />}
+              </div>
+            </div>
 
-        {/* 右侧编辑器 */}
-        <div className="flex-1 flex flex-col min-w-0 bg-white">
-          <TiptapEditor onEditorReady={setEditor} />
-          {/* 底部操作栏 */}
-          <div className="border-t border-gray-200 px-4 py-2.5 flex items-center justify-between bg-gray-50 shrink-0">
-            <span className="text-xs text-gray-400">
-              {editor ? `字符数: ${editor.getText().length}` : ""}
-            </span>
-            <button
-              onClick={handleCopy}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-md text-sm text-gray-700 hover:bg-gray-50 transition-colors"
-            >
-              <ClipboardCopy size={14} />
-              复制到剪贴板
-            </button>
-          </div>
-        </div>
+            {/* 右侧编辑器 */}
+            <div className="flex-1 flex flex-col min-w-0 bg-white">
+              <TiptapEditor onEditorReady={setEditor} />
+              {/* 底部操作栏 */}
+              <div className="border-t border-gray-200 px-4 py-2.5 flex items-center justify-between bg-gray-50 shrink-0">
+                <span className="text-xs text-gray-400">
+                  {editor ? `字符数: ${editor.getText().length}` : ""}
+                </span>
+                <button
+                  onClick={handleCopy}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-md text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  <ClipboardCopy size={14} />
+                  复制到剪贴板
+                </button>
+              </div>
+            </div>
+          </>
+        )}
       </main>
 
       {/* 复制提示 Toast */}
@@ -161,74 +167,158 @@ function App() {
         </div>
       )}
     </div>
+    </RequirementsProvider>
   );
 }
 
 // ========== 需求上传标签页 ==========
 function UploadTab() {
+  const {
+    requirements,
+    setRequirements,
+    parsedText,
+    setParsedText,
+    uploadedFiles,
+    setUploadedFiles,
+  } = useRequirements();
+
   const [isDragging, setIsDragging] = useState(false);
-  const [fileName, setFileName] = useState<string | null>(null);
-  const [parsedText, setParsedText] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
+  const [analysisPhase, setAnalysisPhase] = useState<'parsing' | 'analyzing' | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [requirements, setRequirements] = useState<
-    { id: number; text: string; checked: boolean; category: string }[]
-  >([
-    { id: 1, text: "实现基于角色的访问控制（RBAC）", checked: true, category: "技术要求" },
-    { id: 2, text: "支持 LDAP/AD 域账号集成", checked: true, category: "技术要求" },
-    { id: 3, text: "密码策略需满足等保 2.0 三级要求", checked: true, category: "技术要求" },
-    { id: 4, text: "投标人须具备信息安全等级保护测评机构资质", checked: true, category: "资质要求" },
-    { id: 5, text: "报价须包含三年维保费用", checked: false, category: "商务要求" },
-  ]);
 
   const toggleReq = (id: number) => {
-    setRequirements((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, checked: !r.checked } : r))
+    setRequirements(
+      requirements.map((r) => (r.id === id ? { ...r, checked: !r.checked } : r))
     );
   };
 
-  const handleParseFile = async (filePath: string, name: string) => {
+  // 追加文件到上传列表（上限 3 个）
+  const handleAddFile = async (filePath: string, name: string) => {
+    if (uploadedFiles.length >= 3) {
+      setError("最多支持 3 个文件");
+      return;
+    }
+    setUploadedFiles([...uploadedFiles, { path: filePath, name, parsedText: "" }]);
+    setError(null);
+  };
+
+  // 删除单个文件
+  const handleRemoveFile = (index: number) => {
+    const next = uploadedFiles.filter((_, i) => i !== index);
+    setUploadedFiles(next);
+    if (next.length === 0) {
+      setParsedText("");
+      setRequirements([]);
+      setError(null);
+    }
+  };
+
+  // 并行解析所有文件并提取需求
+  const handleParseFiles = async () => {
+    if (uploadedFiles.length === 0) return;
     setIsLoading(true);
+    setAnalysisPhase('parsing');
     setError(null);
     setParsedText("");
+    setRequirements([]);
+
     try {
-      const text: string = await invoke("parse_document", { filePath });
-      setFileName(name);
-      setParsedText(text);
+      const results = await Promise.all(
+        uploadedFiles.map(async (f) => {
+          setAnalysisPhase('analyzing');
+          const parsed = await invoke<{ text: string; paragraphs: Array<{ index: number; text: string; char_offset: number }> }>("parse_document", { filePath: f.path });
+          const extracted: {
+            requirements?: Array<{ id: number; text: string; certainty: string; selected: boolean }>;
+          } = await invoke("extract_requirements", { text: parsed.text, docType: "technical" });
+          return {
+            ...f,
+            parsedText: parsed.text,
+            requirements: (extracted?.requirements || []).map((r) => ({
+              id: r.id,
+              section: "",
+              text: r.text,
+              category: "技术要求",
+              mandatory: true,
+              keywords: [] as string[],
+              checked: r.selected,
+            })),
+          };
+        })
+      );
+
+      // 更新 uploadedFiles（填充 parsedText）
+      setUploadedFiles(results.map((r) => ({ path: r.path, name: r.name, parsedText: r.parsedText })));
+
+      // 合并 parsedText：用分隔符，首部标注文件名
+      const mergedText = results
+        .map((r) => `【${r.name}】\n${r.parsedText}`)
+        .join("\n\n---\n\n");
+      setParsedText(mergedText);
+
+      // 合并 requirements：扁平化并重新编号 id
+      let nextId = 1;
+      const mergedRequirements = results.flatMap((r) =>
+        r.requirements.map((req) => ({ ...req, id: nextId++ }))
+      );
+      setRequirements(mergedRequirements);
     } catch (e: any) {
       setError(`解析失败: ${String(e)}`);
     } finally {
       setIsLoading(false);
+      setAnalysisPhase(null);
     }
   };
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    const files = e.dataTransfer.files;
-    if (files.length === 0) return;
-    const file = files[0];
-    // Tauri 桌面环境中 File 对象可能暴露 path 属性
-    const path = (file as any).path;
-    if (path) {
-      await handleParseFile(path, file.name);
-    } else {
-      setError("无法获取文件路径，请使用点击选择文件");
-    }
   };
+
+  const stableAddFileRef = useRef(handleAddFile);
+  stableAddFileRef.current = handleAddFile;
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<{ files: Array<{ path: string; name: string }> }>("file-dropped", (event) => {
+      const files = event.payload.files;
+      const remaining = 3 - uploadedFiles.length;
+      if (files.length > remaining) {
+        setError(`最多支持 3 个文件，已自动截取前 ${remaining} 个`);
+      }
+      const toAdd = files.slice(0, remaining);
+      toAdd.forEach((f) => stableAddFileRef.current(f.path, f.name));
+    })
+      .then((f) => {
+        unlisten = f;
+      })
+      .catch((err) => {
+        console.warn("监听文件拖拽事件失败:", err);
+      });
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [uploadedFiles.length]);
 
   const handleSelect = async () => {
     try {
+      const remaining = 3 - uploadedFiles.length;
+      if (remaining <= 0) {
+        setError("最多支持 3 个文件");
+        return;
+      }
       const selected = await open({
-        multiple: false,
+        multiple: remaining > 1,
         filters: [
-          { name: "文档", extensions: ["docx", "doc", "pdf", "xlsx", "txt"] },
+          { name: "文档", extensions: ["docx", "pdf", "xlsx", "txt"] },
         ],
       });
-      if (selected && typeof selected === "string") {
-        const name = selected.split("/").pop() || selected;
-        await handleParseFile(selected, name);
-      }
+      if (!selected) return;
+      const files: string[] = Array.isArray(selected) ? selected : [selected];
+      files.slice(0, remaining).forEach((path) => {
+        const name = path.split("/").pop() || path;
+        handleAddFile(path, name);
+      });
     } catch (e: any) {
       setError(`选择文件失败: ${String(e)}`);
     }
@@ -256,29 +346,65 @@ function UploadTab() {
               handleSelect();
             }
           }}
-          className={`border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-colors ${
+          className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-colors ${
             isDragging
               ? "border-blue-400 bg-blue-50"
               : "border-gray-300 bg-white hover:border-gray-400"
           }`}
         >
-          <FileText size={40} className="mx-auto text-gray-400 mb-3" />
-          {isLoading ? (
-            <p className="text-blue-600 font-medium">正在解析文件...</p>
-          ) : fileName ? (
-            <>
-              <p className="text-gray-800 font-medium">{fileName}</p>
-              <p className="text-gray-400 text-sm mt-1">点击重新选择文件</p>
-            </>
-          ) : (
-            <>
-              <p className="text-gray-600 font-medium">拖入文件到这里 或 点击选择</p>
-              <p className="text-gray-400 text-sm mt-1">
-                支持: .docx .doc .pdf .xlsx .txt
-              </p>
-            </>
+          <FileText size={32} className="mx-auto text-gray-400 mb-2" />
+          <p className="text-gray-600 font-medium text-sm">拖入文件到这里 或 点击选择</p>
+          <p className="text-gray-400 text-xs mt-1">支持: .docx .pdf .xlsx .txt（最多 3 个）</p>
+        </div>
+
+        {/* 文件列表 */}
+        {uploadedFiles.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {uploadedFiles.map((f, idx) => (
+              <div
+                key={idx}
+                className="flex items-center justify-between px-3 py-2 bg-white rounded-lg border border-gray-200"
+              >
+                <span className="text-sm text-gray-700 truncate">{f.name}</span>
+                <button
+                  onClick={() => handleRemoveFile(idx)}
+                  className="text-xs text-red-500 hover:text-red-600 ml-2"
+                >
+                  删除
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* 操作按钮 */}
+        <div className="mt-3 flex gap-2">
+          {uploadedFiles.length < 3 && (
+            <button
+              onClick={handleSelect}
+              className="flex-1 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+            >
+              选择文件
+            </button>
+          )}
+          {uploadedFiles.length > 0 && !isLoading && (
+            <button
+              onClick={handleParseFiles}
+              className="flex-1 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+            >
+              开始分析
+            </button>
           )}
         </div>
+
+        {/* 分析进度 */}
+        {isLoading && (
+          <p className="mt-2 text-sm text-blue-600 font-medium text-center">
+            {analysisPhase === 'parsing'
+              ? `正在解析文档（${uploadedFiles.length} 个文件）...`
+              : '正在分析需求要点...'}
+          </p>
+        )}
         {error && (
           <p className="mt-2 text-sm text-red-600">{error}</p>
         )}
@@ -300,7 +426,13 @@ function UploadTab() {
       <section>
         <h2 className="text-base font-semibold mb-3">需求要点提取</h2>
         <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
-          {requirements.map((req) => (
+          {requirements.length === 0 && !isLoading && parsedText && !error ? (
+            <div className="px-4 py-6 text-center text-gray-500">
+              <p className="text-sm">未从文档中识别出明确需求要点</p>
+              <p className="text-xs mt-1 text-gray-400">请手动添加</p>
+            </div>
+          ) : (
+            requirements.map((req) => (
             <label
               key={req.id}
               className="flex items-start gap-3 px-4 py-3 hover:bg-gray-50 cursor-pointer"
@@ -320,7 +452,7 @@ function UploadTab() {
                 </span>
               </div>
             </label>
-          ))}
+          )))}
         </div>
         <button className="mt-2 text-sm text-blue-600 hover:text-blue-700 font-medium">
           + 添加自定义要点
@@ -368,70 +500,111 @@ function UploadTab() {
   );
 }
 
-// ========== 智能推送标签页 ==========
-function PushTab() {
-  return (
-    <div className="h-full p-6">
-      <h2 className="text-base font-semibold mb-4 flex items-center gap-2">
-        <Sparkles size={18} />
-        智能内容推送
-      </h2>
-      <div className="bg-white rounded-lg border border-gray-200 p-6">
-        <p className="text-gray-500 text-center py-10">
-          在编辑器中输入内容，系统将自动识别关键词并推送相关模板...
-        </p>
-      </div>
-    </div>
-  );
-}
+// ========== 智能生成标签页 ==========
+// PushTab 已升级为 GenerateTab 组件（见 components/GenerateTab.tsx）
 
-function CheckTab({ editor }: { editor: any }) {
-  const [reqFile, setReqFile] = useState<string | null>(null);
-  const [bidFile, setBidFile] = useState<string | null>(null);
-  const [report, setReport] = useState<DeviationReport | null>(null);
-  const [fatalRisks, setFatalRisks] = useState<FatalRisk[]>([]);
+function CheckTabFullScreen() {
+  const {
+    requirements,
+    bidFilePath,
+    setBidFilePath,
+    bidFileName,
+    setBidFileName,
+    bidParagraphs,
+    setBidParagraphs,
+    checkReport,
+    setCheckReport,
+    checkFatalRisks,
+    setCheckFatalRisks,
+    checkSelfReviewReport,
+    setCheckSelfReviewReport,
+  } = useRequirements();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [punctIssues, setPunctIssues] = useState<PunctuationIssue[]>([]);
-  const [punctLoading, setPunctLoading] = useState(false);
+  const [highlightedIdx, setHighlightedIdx] = useState<number | null>(null);
+  const [showDocWarning, setShowDocWarning] = useState(false);
+  const [pendingDocPath, setPendingDocPath] = useState<string | null>(null);
+  const [showFixConfirm, setShowFixConfirm] = useState(false);
+  const [fixing, setFixing] = useState(false);
+  const [fixMode, setFixMode] = useState<'copy' | 'overwrite'>('copy');
+  const [showFixResult, setShowFixResult] = useState(false);
+  const [fixResult, setFixResult] = useState<any>(null);
+  const [modifiedIdxs, setModifiedIdxs] = useState<number[]>([]);
+  const previewRef = useRef<HTMLDivElement>(null);
+  const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const pickFile = async (type: "req" | "bid") => {
-    const selected = await open({
-      multiple: false,
-      filters: [
-        { name: "文档", extensions: ["docx", "doc", "pdf", "xlsx", "txt"] },
-      ],
-    });
-    if (selected && typeof selected === "string") {
-      if (type === "req") setReqFile(selected);
-      else setBidFile(selected);
+  const handleSelectFile = async () => {
+    setError(null);
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "文档", extensions: ["docx", "doc"] }],
+      });
+      if (selected && typeof selected === "string") {
+        const name = selected.split("/").pop() || selected;
+        const ext = name.split(".").pop()?.toLowerCase();
+        if (ext === "doc") {
+          setPendingDocPath(selected);
+          setShowDocWarning(true);
+          return;
+        }
+        await loadFile(selected, name);
+      }
+    } catch (e: any) {
+      setError(`选择或解析文件失败: ${String(e)}`);
+    }
+  };
+
+  const loadFile = async (path: string, name: string) => {
+    try {
+      const result: any = await invoke("parse_document", { filePath: path });
+      setBidFilePath(path);
+      setBidFileName(name);
+      setBidParagraphs(result.paragraphs || []);
+      setCheckReport(null);
+      setCheckFatalRisks([]);
+      setCheckSelfReviewReport(null);
       setError(null);
+    } catch (e: any) {
+      setError(`解析失败: ${String(e)}`);
+    }
+  };
+
+  const confirmDocContinue = async () => {
+    setShowDocWarning(false);
+    if (pendingDocPath) {
+      const name = pendingDocPath.split("/").pop() || pendingDocPath;
+      await loadFile(pendingDocPath, name);
+      setPendingDocPath(null);
     }
   };
 
   const runCheck = async () => {
-    if (!reqFile || !bidFile) {
-      setError("请同时上传招标文件和投标文档");
+    if (!bidFilePath || bidParagraphs.length === 0) {
+      setError("请先选择投标文档");
       return;
     }
+    if (requirements.length === 0) {
+      setError("请在「需求上传」Tab 先上传招标文件并提取需求");
+      return;
+    }
+    const bidText = bidParagraphs.map((p) => p.text).join("\n");
+
     setLoading(true);
     setError(null);
-    setReport(null);
-    setFatalRisks([]);
+    setCheckReport(null);
+    setCheckFatalRisks([]);
+    setCheckSelfReviewReport(null);
     try {
-      const result: DeviationReport = await invoke("check_deviation_files", {
-        bidPath: bidFile,
-        reqPath: reqFile,
-      });
-      setReport(result);
-
-      const bidText: string = await invoke("parse_document", {
-        filePath: bidFile,
-      });
-      const risks: FatalRisk[] = await invoke("check_fatal_risks_text", {
-        text: bidText,
-      });
-      setFatalRisks(risks);
+      const reqItems = requirements.filter((r) => r.checked);
+      const [result, risks, selfReview] = await Promise.all([
+        invoke<DeviationReport>("check_deviation_items", { reqItems, bidText }),
+        invoke<FatalRisk[]>("check_fatal_risks_text", { text: bidText }),
+        invoke<any>("check_self_review_async", { text: bidText }),
+      ]);
+      setCheckReport(result);
+      setCheckFatalRisks(risks);
+      setCheckSelfReviewReport(selfReview);
     } catch (e: any) {
       setError(String(e));
     } finally {
@@ -440,9 +613,9 @@ function CheckTab({ editor }: { editor: any }) {
   };
 
   const exportMd = async () => {
-    if (!report) return;
+    if (!checkReport) return;
     try {
-      const md: string = await invoke("export_deviation_report_markdown", { report });
+      const md: string = await invoke("export_deviation_report_markdown", { report: checkReport });
       const blob = new Blob([md], { type: "text/markdown" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -455,78 +628,298 @@ function CheckTab({ editor }: { editor: any }) {
     }
   };
 
-  const clear = () => {
-    setReqFile(null);
-    setBidFile(null);
-    setReport(null);
-    setFatalRisks([]);
-    setError(null);
-    setPunctIssues([]);
-  };
-
-  const runPunctuationCheck = async () => {
-    if (!editor) {
-      setError("编辑器未就绪");
-      return;
-    }
-    const text = editor.getText();
-    setPunctLoading(true);
+  const handleFix = async () => {
+    if (!bidFilePath || !checkSelfReviewReport) return;
+    setShowFixConfirm(false);
+    setFixing(true);
     setError(null);
     try {
-      const issues: PunctuationIssue[] = await invoke("check_punctuation", { text });
-      setPunctIssues(issues);
+      const issues = checkSelfReviewReport.issues || [];
+      const result = await invoke("apply_self_review_fixes", {
+        filePath: bidFilePath,
+        issues,
+        mode: fixMode,
+      });
+      setFixResult(result);
+      const changes = (result as any)?.changes || [];
+      const idxs = changes.map((c: any) => c.paragraph_index);
+      setModifiedIdxs(idxs);
+      setShowFixResult(true);
     } catch (e: any) {
-      setError(String(e));
+      setError(`修复失败: ${String(e)}`);
     } finally {
-      setPunctLoading(false);
+      setFixing(false);
     }
   };
 
-  const applyPunctuationFixes = () => {
-    if (!editor || punctIssues.length === 0) return;
-    // 从后往前替换，避免位置偏移
-    const sorted = [...punctIssues].sort((a, b) => b.position - a.position);
-    editor
-      .chain()
-      .focus()
-      .command(({ tr, state }: any) => {
-        for (const issue of sorted) {
-          const from = issue.position + 1; // ProseMirror 位置从 1 开始
-          const to = from + issue.original.length;
-          // 安全检查：位置有效且内容匹配才替换
-          if (from < 1 || to > state.doc.content.size) continue;
-          const currentText = state.doc.textBetween(from, to);
-          if (currentText !== issue.original) continue;
-          // 使用 insertText 保留 marks 和 undo 历史
-          tr.insertText(issue.suggestion, from, to);
-        }
-        return true;
-      })
-      .run();
-    setPunctIssues([]);
+  const clear = () => {
+    setCheckReport(null);
+    setCheckFatalRisks([]);
+    setCheckSelfReviewReport(null);
+    setError(null);
   };
 
+  const jumpToParagraph = (paragraphIndex: number | undefined) => {
+    if (paragraphIndex === undefined || !previewRef.current) return;
+    const el = previewRef.current.querySelector(`[data-paragraph-index="${paragraphIndex}"]`);
+    if (el) {
+      if (typeof (el as any).scrollIntoView === "function") {
+        (el as any).scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+      setHighlightedIdx(paragraphIndex);
+      if (highlightTimeoutRef.current) {
+        clearTimeout(highlightTimeoutRef.current);
+      }
+      highlightTimeoutRef.current = setTimeout(() => setHighlightedIdx(null), 2500);
+    }
+  };
+
+  const highlightModified = () => {
+    if (modifiedIdxs.length === 0 || !previewRef.current) return;
+    const firstIdx = modifiedIdxs[0];
+    const el = previewRef.current.querySelector(`[data-paragraph-index="${firstIdx}"]`);
+    if (el && typeof (el as any).scrollIntoView === "function") {
+      (el as any).scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimeoutRef.current) {
+        clearTimeout(highlightTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const hasFixableIssues =
+    checkSelfReviewReport?.issues?.some((i: any) => i.auto_fixable) ?? false;
+  const isDocFile = bidFileName?.toLowerCase().endsWith(".doc");
+
   return (
-    <div className="h-full flex flex-col overflow-hidden">
-      <DeviationPanel
-        reqFile={reqFile}
-        bidFile={bidFile}
-        report={report}
-        fatalRisks={fatalRisks}
-        loading={loading}
-        error={error}
-        onPickFile={pickFile}
-        onRunCheck={runCheck}
-        onExportMd={exportMd}
-        onClear={clear}
-      />
-      <PunctuationPanel
-        editor={editor}
-        issues={punctIssues}
-        loading={punctLoading}
-        onRunCheck={runPunctuationCheck}
-        onApplyFixes={applyPunctuationFixes}
-      />
+    <div className="flex-1 flex overflow-hidden">
+      {/* 左侧结果面板 */}
+      <div className="w-[45%] min-w-[360px] max-w-[560px] flex flex-col border-r border-gray-200 bg-white">
+        <CheckResultsPanel
+          requirements={requirements}
+          report={checkReport}
+          fatalRisks={checkFatalRisks}
+          selfReviewReport={checkSelfReviewReport}
+          loading={loading}
+          error={error}
+          onRunCheck={runCheck}
+          onExportMd={exportMd}
+          onClear={clear}
+          onJumpToParagraph={jumpToParagraph}
+          onFix={() => setShowFixConfirm(true)}
+          hasFixableIssues={hasFixableIssues}
+          isDocFile={isDocFile}
+          hasRequirements={requirements.length > 0}
+        />
+      </div>
+
+      {/* 右侧文档预览区（只读） */}
+      <div className="flex-1 flex flex-col min-w-0 bg-white">
+        {/* 文件选择头部 */}
+        <div className="shrink-0 px-4 py-3 border-b border-gray-200 bg-white flex items-center justify-between">
+          <div className="flex items-center gap-2 min-w-0">
+            <FileText size={16} className="text-gray-400 shrink-0" />
+            <span className="text-sm font-medium text-gray-700 truncate">
+              {bidFileName || "未选择文件"}
+            </span>
+          </div>
+          <button
+            onClick={handleSelectFile}
+            className="text-xs px-3 py-1.5 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors shrink-0"
+          >
+            {bidFileName ? "重新选择" : "选择文件"}
+          </button>
+        </div>
+
+        {/* 预览内容 */}
+        <div ref={previewRef} className="flex-1 overflow-auto p-6 space-y-3">
+          {bidParagraphs.length === 0 && (
+            <div className="text-center text-gray-400 py-20 text-sm">
+              请选择本地 .docx / .doc 文件进行校对
+            </div>
+          )}
+          {bidParagraphs.map((p) => {
+            const isHighlighted = highlightedIdx === p.index;
+            const isModified = modifiedIdxs.includes(p.index);
+            const paraClass =
+              isHighlighted
+                ? "bg-yellow-50 border-yellow-300"
+                : isModified
+                ? "bg-emerald-50 border-emerald-300"
+                : "border-transparent hover:bg-gray-50";
+            return (
+              <div
+                key={p.index}
+                data-paragraph-index={p.index}
+                className={`p-3 rounded border transition-colors duration-300 ${paraClass}`}
+              >
+                <div className="text-xs text-gray-400 mb-1">第 {p.index + 1} 段</div>
+                <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{p.text}</p>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* .doc 警告弹窗 */}
+      {showDocWarning && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 w-96 shadow-xl">
+            <h3 className="text-base font-semibold mb-2">格式提示</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              .doc 格式较旧，建议转换为 .docx 以获得最佳校对体验。是否继续？
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => { setShowDocWarning(false); setPendingDocPath(null); }}
+                className="px-4 py-2 rounded text-sm text-gray-600 hover:bg-gray-100"
+              >
+                取消
+              </button>
+              <button
+                onClick={confirmDocContinue}
+                className="px-4 py-2 rounded text-sm bg-blue-600 text-white hover:bg-blue-700"
+              >
+                继续
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 修复模式选择弹窗 */}
+      {showFixConfirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 w-[420px] shadow-xl">
+            <h3 className="text-base font-semibold mb-3">一键修复</h3>
+            <div className="mb-4">
+              {(() => {
+                const fixable = checkSelfReviewReport?.issues?.filter((i: any) => i.auto_fixable) || [];
+                const byCategory: Record<string, number> = {};
+                fixable.forEach((i: any) => {
+                  const cat = i.sub_category || i.category || '其他';
+                  byCategory[cat] = (byCategory[cat] || 0) + 1;
+                });
+                return (
+                  <div className="text-sm text-gray-600 mb-3">
+                    <p className="mb-1">发现 {fixable.length} 处可自动修复：</p>
+                    <ul className="list-disc list-inside space-y-0.5 text-gray-500">
+                      {Object.entries(byCategory).map(([cat, count]) => (
+                        <li key={cat}>{cat === 'punctuation' ? '标点符号' : cat}：{count} 处</li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })()}
+              <p className="text-sm font-medium text-gray-700 mb-2">修复方式：</p>
+              <label className="flex items-center gap-2 mb-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="fixMode"
+                  value="copy"
+                  checked={fixMode === 'copy'}
+                  onChange={() => setFixMode('copy')}
+                  className="text-blue-600"
+                />
+                <span className="text-sm text-gray-700">生成修复副本（推荐）</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="fixMode"
+                  value="overwrite"
+                  checked={fixMode === 'overwrite'}
+                  onChange={() => setFixMode('overwrite')}
+                  className="text-blue-600"
+                />
+                <span className="text-sm text-gray-700">直接覆盖原文件（自动备份 .bak）</span>
+              </label>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setShowFixConfirm(false)}
+                className="px-4 py-2 rounded text-sm text-gray-600 hover:bg-gray-100"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleFix}
+                disabled={fixing}
+                className="px-4 py-2 rounded text-sm bg-blue-600 text-white hover:bg-blue-700 disabled:bg-gray-300"
+              >
+                {fixing ? "修复中..." : "确认修复"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 修复结果弹窗 */}
+      {showFixResult && fixResult && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 w-[520px] max-h-[80vh] overflow-auto shadow-xl">
+            <h3 className="text-base font-semibold mb-3">修复完成</h3>
+            <div className="mb-4">
+              <p className="text-sm text-gray-700 mb-2">
+                ✅ 已修复 {fixResult.changes?.length || 0} 处问题
+              </p>
+              <p className="text-sm text-gray-600 mb-1">
+                📄 文件：{fixResult.output_path}
+              </p>
+              {fixResult.backup_path && (
+                <p className="text-sm text-gray-500">
+                  （原文件已覆盖，备份在 {fixResult.backup_path}）
+                </p>
+              )}
+            </div>
+
+            {fixResult.changes && fixResult.changes.length > 0 && (
+              <div className="mb-4">
+                <p className="text-sm font-medium text-gray-700 mb-2">修改明细：</p>
+                <table className="w-full text-sm border border-gray-200 rounded-lg overflow-hidden">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-3 py-2 text-left text-gray-600 font-medium border-b">段落</th>
+                      <th className="px-3 py-2 text-left text-gray-600 font-medium border-b">原文</th>
+                      <th className="px-3 py-2 text-left text-gray-600 font-medium border-b">修改后</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fixResult.changes.map((change: any, idx: number) => (
+                      <tr key={idx} className="border-b border-gray-100 last:border-0">
+                        <td className="px-3 py-2 text-gray-700">#{change.paragraph_index + 1}</td>
+                        <td className="px-3 py-2 text-red-600 font-mono text-xs">{change.original}</td>
+                        <td className="px-3 py-2 text-emerald-600 font-mono text-xs">{change.modified}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2">
+              {modifiedIdxs.length > 0 && (
+                <button
+                  onClick={() => { highlightModified(); setShowFixResult(false); }}
+                  className="px-4 py-2 rounded text-sm bg-emerald-600 text-white hover:bg-emerald-700"
+                >
+                  在预览区高亮显示修改
+                </button>
+              )}
+              <button
+                onClick={() => setShowFixResult(false)}
+                className="px-4 py-2 rounded text-sm text-gray-600 hover:bg-gray-100"
+              >
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

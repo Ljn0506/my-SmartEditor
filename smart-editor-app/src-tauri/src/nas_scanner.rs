@@ -3,13 +3,17 @@ use std::path::Path;
 use walkdir::WalkDir;
 
 use crate::error::Result;
-use crate::models::{DocumentType, ProjectPhase, Template};
+use crate::models::{DocumentType, Template};
 use crate::parser::parse_document;
+use crate::utils::validate_path;
 
 const SUPPORTED_EXTS: &[&str] = &["docx", "pdf", "xlsx", "xls", "txt", "md"];
 
 /// 扫描目录，返回所有支持的文件路径
+/// 安全约束：所有返回的文件路径必须在 dir_path 范围内
 pub fn scan_directory(dir_path: &str) -> Result<Vec<String>> {
+    validate_path(dir_path)?;
+    let allowed_clean = crate::utils::normalize_absolute_path(dir_path);
     let mut files = Vec::new();
     for entry in WalkDir::new(dir_path)
         .follow_links(false)
@@ -22,7 +26,14 @@ pub fn scan_directory(dir_path: &str) -> Result<Vec<String>> {
         if let Some(ext) = entry.path().extension() {
             let ext = ext.to_string_lossy().to_lowercase();
             if SUPPORTED_EXTS.contains(&ext.as_str()) {
-                files.push(entry.path().to_string_lossy().to_string());
+                let file_path = entry.path().to_string_lossy().to_string();
+                // 安全加固：验证文件路径不超出扫描根目录
+                if validate_path(&file_path).is_ok() {
+                    let target_clean = crate::utils::normalize_absolute_path(&file_path);
+                    if target_clean.starts_with(&allowed_clean) {
+                        files.push(file_path);
+                    }
+                }
             }
         }
     }
@@ -92,6 +103,7 @@ pub fn detect_document_type(file_name: &str) -> DocumentType {
 
 /// 将单个文件解析为 Template（未入库）
 pub fn file_to_template(file_path: &str) -> Result<Template> {
+    crate::utils::validate_path(file_path)?;
     let text = parse_document(file_path)?;
     let path = Path::new(file_path);
     let file_name = path
@@ -100,8 +112,8 @@ pub fn file_to_template(file_path: &str) -> Result<Template> {
         .unwrap_or_else(|| "未命名".to_string());
 
     let _doc_type = detect_document_type(&file_name);
-    let (doc_attr, business_domain, content_module) =
-        crate::category::infer_categories(&file_name, &text);
+    let (doc_attr, business_domain, content_module, project_phase, security_layer) =
+        crate::category::infer_categories(file_path, &file_name, &text);
 
     let tags = infer_tags(&file_name, &text);
 
@@ -112,9 +124,9 @@ pub fn file_to_template(file_path: &str) -> Result<Template> {
         content_html: None,
         doc_attr,
         business_domain,
-        security_layer: None,
+        security_layer,
         content_module,
-        project_phase: Some(ProjectPhase::Bidding),
+        project_phase,
         tags,
         source_file: Some(file_path.to_string()),
         source_para_range: None,
@@ -238,17 +250,19 @@ mod tests {
 
     #[test]
     fn test_infer_categories() {
-        let (doc_attr, domain, module) =
-            crate::category::infer_categories("等保2.0投标应答技术方案.docx", "");
+        let (doc_attr, domain, module, phase, layer) =
+            crate::category::infer_categories("", "等保2.0投标应答技术方案.docx", "");
         assert_eq!(doc_attr, Some(crate::models::DocAttr::BidResponse));
         assert_eq!(domain, Some(crate::models::BusinessDomain::NetworkSecurity));
         assert_eq!(
             module,
             Some(crate::models::ContentModule::TechnicalProposal)
         );
+        assert_eq!(phase, None);
+        assert_eq!(layer, None);
 
-        let (doc_attr2, domain2, module2) =
-            crate::category::infer_categories("偏离表-资质证书.xlsx", "");
+        let (doc_attr2, domain2, module2, phase2, layer2) =
+            crate::category::infer_categories("", "偏离表-资质证书.xlsx", "");
         assert_eq!(doc_attr2, Some(crate::models::DocAttr::ReportMaterial));
         assert_eq!(
             domain2,
@@ -258,6 +272,8 @@ mod tests {
             module2,
             Some(crate::models::ContentModule::DeviationExplanation)
         );
+        assert_eq!(phase2, None);
+        assert_eq!(layer2, None);
     }
 
     #[test]

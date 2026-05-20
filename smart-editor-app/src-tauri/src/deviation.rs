@@ -189,12 +189,19 @@ pub fn judge_deviation(req: &RequirementItem, resp: &ResponseMatch) -> Deviation
         risk_level,
         explanation,
         suggestion,
+        paragraph_index: Some(resp.paragraph_index),
     }
 }
 
 /// 主入口：对两份文本执行偏离检查
 pub fn check_deviation(bid_text: &str, req_text: &str) -> DeviationReport {
     let requirements = extract_requirements(req_text);
+    check_deviation_items(&requirements, bid_text)
+}
+
+/// 接受已解析的需求列表 + 投标文本，执行偏离检查
+/// 用于「校对」Tab：招标文件已在「需求上传」Tab 解析好，直接传入需求项
+pub fn check_deviation_items(req_items: &[RequirementItem], bid_text: &str) -> DeviationReport {
     let paragraphs: Vec<&str> = bid_text
         .lines()
         .map(|s| s.trim())
@@ -207,11 +214,10 @@ pub fn check_deviation(bid_text: &str, req_text: &str) -> DeviationReport {
     let mut major_count = 0usize;
     let mut fatal_risk_count = 0usize;
 
-    for req in &requirements {
+    for req in req_items {
         let result = if let Some(resp) = find_response(req, &paragraphs) {
             judge_deviation(req, &resp)
         } else {
-            // 未找到应答：视为重大偏离
             DeviationCheckResult {
                 id: req.id,
                 section: req.section.clone(),
@@ -221,6 +227,7 @@ pub fn check_deviation(bid_text: &str, req_text: &str) -> DeviationReport {
                 risk_level: "致命".to_string(),
                 explanation: "投标文件中未找到对应应答内容".to_string(),
                 suggestion: "补充对应应答段落，或明确说明原因".to_string(),
+                paragraph_index: None,
             }
         };
 
@@ -253,6 +260,13 @@ pub fn check_deviation(bid_text: &str, req_text: &str) -> DeviationReport {
 impl DeviationReport {
     /// 导出为 Markdown 格式
     pub fn to_markdown(&self) -> String {
+        let esc = |s: &str| -> String {
+            s.replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('"', "&quot;")
+                .replace('|', "\\|")
+        };
         let mut md = String::new();
         md.push_str("# 偏离检查报告\n\n");
         md.push_str(&format!(
@@ -276,12 +290,12 @@ impl DeviationReport {
             md.push_str(&format!(
                 "| {} | {} | {} | {} | {} | {} | {} |\n",
                 item.id,
-                item.section.replace('|', "\\|"),
-                item.requirement_text.replace('|', "\\|"),
+                esc(&item.section),
+                esc(&item.requirement_text),
                 status_str,
                 item.risk_level,
-                item.explanation.replace('|', "\\|"),
-                item.suggestion.replace('|', "\\|")
+                esc(&item.explanation),
+                esc(&item.suggestion)
             ));
         }
         md
@@ -518,9 +532,7 @@ fn match_numeric(
 }
 
 fn is_same_unit(a: &str, b: &str) -> bool {
-    let a = a.trim();
-    let b = b.trim();
-    a == b || a.contains(b) || b.contains(a)
+    a.trim().eq_ignore_ascii_case(b.trim())
 }
 
 #[cfg(test)]
@@ -821,5 +833,61 @@ mod tests {
         assert_eq!(iso_item.status, DeviationStatus::Major);
         assert_eq!(iso_item.risk_level, "致命");
         assert!(iso_item.response_text.is_none());
+    }
+
+    /// B5: paragraph_index 与 parse_document.paragraphs 索引一致
+    #[test]
+    fn test_check_deviation_items_paragraph_index_aligned() {
+        // 构造 3 个非空段落的投标文本（与 parse_document.text 结构一致）
+        let bid_text = "第一段：我们提供7x24小时技术支持服务。\n\n第二段：我公司具有独立法人资格，注册资本1000万元。\n\n第三段：完全满足招标要求。";
+        let req = RequirementItem {
+            id: 1,
+            section: "1".to_string(),
+            text: "投标人必须具备法人资格".to_string(),
+            category: "商务".to_string(),
+            mandatory: true,
+            keywords: extract_keywords("投标人必须具备法人资格"),
+        };
+        let report = check_deviation_items(&[req], bid_text);
+        assert_eq!(report.total, 1);
+        // 第二段包含 "法人" 和 "资格"，paragraph_index 应为 1
+        assert_eq!(
+            report.items[0].paragraph_index,
+            Some(1),
+            "paragraph_index 应与 parse_document.paragraphs 索引对齐"
+        );
+        // 验证第二段文本确实包含匹配内容
+        let second_para = bid_text.lines().map(|s| s.trim()).filter(|s| !s.is_empty()).nth(1).unwrap();
+        assert!(second_para.contains("法人资格"));
+    }
+
+    // ── T9-B3：边界处理 ──
+
+    #[test]
+    fn test_check_deviation_items_empty() {
+        let report = check_deviation_items(&[], "任意投标文本");
+        assert_eq!(report.total, 0);
+        assert_eq!(report.none_count, 0);
+        assert_eq!(report.positive_count, 0);
+        assert_eq!(report.minor_count, 0);
+        assert_eq!(report.major_count, 0);
+        assert_eq!(report.fatal_risk_count, 0);
+        assert!(report.items.is_empty());
+    }
+
+    #[test]
+    fn test_check_deviation_items_empty_bid_text() {
+        let req = RequirementItem {
+            id: 1,
+            section: "1".to_string(),
+            text: "投标人必须具有 ISO27001 认证".to_string(),
+            category: "商务".to_string(),
+            mandatory: true,
+            keywords: extract_keywords("投标人必须具有 ISO27001 认证"),
+        };
+        let report = check_deviation_items(&[req], "");
+        assert_eq!(report.total, 1);
+        assert_eq!(report.major_count, 1);
+        assert_eq!(report.fatal_risk_count, 1);
     }
 }

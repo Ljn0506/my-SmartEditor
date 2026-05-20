@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod ai;
+mod apply_self_review_fixes;
 mod category;
 mod clipboard;
 mod config;
@@ -14,17 +15,20 @@ mod nas_scanner;
 mod parser;
 mod punctuation;
 mod search;
+mod self_review;
+mod utils;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::{Emitter, Manager};
 
 use crate::ai::AiClient;
 use crate::db::Database;
 use crate::desensitize::DesensitizeHit;
 use crate::models::{
-    AiConfig, DeviationReport, DocumentType, ParsedDocument, ParsedRequirements, SearchResult,
-    Template,
+    AiConfig, AiProvider, DeviationReport, DocumentType, ParsedDocument, ParsedDocumentStructured, ParsedRequirements,
+    SearchResult, SelfReviewReport, Template,
 };
 use crate::nas_scanner::{scan_directory, ImportResult};
 use crate::search::SearchEngine;
@@ -34,11 +38,12 @@ pub struct AppState {
     search: Option<SearchEngine>,
     ai: Mutex<AiClient>,
     config_path: PathBuf,
+
 }
 
 impl AppState {
     fn ai_client(&self) -> Result<AiClient, String> {
-        let guard = self.ai.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = self.ai.lock().map_err(|e| format!("AI 客户端锁定失败: {}", e))?;
         Ok(guard.clone())
     }
 }
@@ -46,12 +51,22 @@ impl AppState {
 // --- 文档解析命令 ---
 
 #[tauri::command]
-fn parse_document(file_path: String) -> Result<String, String> {
-    parser::parse_document(&file_path).map_err(|e| e.to_string())
+fn parse_document(file_path: String) -> Result<ParsedDocumentStructured, String> {
+    crate::utils::validate_path(&file_path).map_err(|e| e.to_string())?;
+    let meta = std::fs::metadata(&file_path).map_err(|e| e.to_string())?;
+    if !meta.is_file() {
+        return Err("路径不是有效的文件".to_string());
+    }
+    parser::parse_document_structured(&file_path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn parse_requirement_file(file_path: String) -> Result<ParsedDocument, String> {
+    crate::utils::validate_path(&file_path).map_err(|e| e.to_string())?;
+    let meta = std::fs::metadata(&file_path).map_err(|e| e.to_string())?;
+    if !meta.is_file() {
+        return Err("路径不是有效的文件".to_string());
+    }
     let text = parser::parse_document(&file_path).map_err(|e| e.to_string())?;
     let path = std::path::Path::new(&file_path);
     let file_name = path
@@ -213,7 +228,16 @@ async fn index_templates(
 #[tauri::command]
 fn get_ai_config(state: tauri::State<'_, AppState>) -> Result<AiConfig, String> {
     let app_config = config::load_or_create(&state.config_path).map_err(|e| e.to_string())?;
-    Ok(app_config.to_ai_config())
+    let mut ai = app_config.to_ai_config();
+    // 脱敏：避免 API Key 泄露到前端
+    ai.api_key = ai.api_key.map(|k| {
+        if k.len() > 8 {
+            format!("{}****", &k[..4])
+        } else {
+            "****".to_string()
+        }
+    });
+    Ok(ai)
 }
 
 #[tauri::command]
@@ -223,11 +247,11 @@ fn update_ai_config(state: tauri::State<'_, AppState>, ai: AiConfig) -> Result<(
     app_config.ai_base_url = ai.base_url.clone();
     app_config.ai_api_key = ai.api_key.clone();
     app_config.ai_model = ai.model.clone();
+    app_config.ai_timeout_secs = ai.timeout_secs;
     config::save(&state.config_path, &app_config).map_err(|e| e.to_string())?;
-    let new_ai = AiClient::new(ai);
-    if let Ok(mut guard) = state.ai.lock() {
-        *guard = new_ai;
-    }
+    let new_ai = AiClient::new(ai).map_err(|e| e.to_string())?;
+    let mut guard = state.ai.lock().map_err(|e| e.to_string())?;
+    *guard = new_ai;
     Ok(())
 }
 
@@ -279,6 +303,9 @@ async fn import_nas_files(
         let results: Vec<(Option<Template>, Option<String>)> = paths
             .into_par_iter()
             .map(|path| {
+                if let Err(e) = crate::utils::validate_path(&path) {
+                    return (None, Some(format!("路径验证失败: {}", e)));
+                }
                 let result = nas_scanner::file_to_template(&path);
                 let current = progress.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                 if current % 5 == 0 || current == total {
@@ -348,7 +375,7 @@ async fn import_nas_files(
         .into_iter()
         .filter(|t| {
             t.id.is_some()
-                && !failed_files.contains(t.source_file.as_ref().unwrap_or(&String::new()))
+                && t.source_file.as_ref().is_none_or(|sf| !failed_files.contains(sf))
         })
         .collect();
 
@@ -378,18 +405,40 @@ fn detect_document_type(file_name: String) -> DocumentType {
     nas_scanner::detect_document_type(&file_name)
 }
 
+async fn spawn_blocking_cmd<T, F>(f: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    tokio::task::spawn_blocking(f).await.map_err(|e| e.to_string())
+}
+
 // --- 偏离检查命令 ---
 
 #[tauri::command]
-fn check_deviation(bid_text: String, req_text: String) -> DeviationReport {
-    deviation::check_deviation(&bid_text, &req_text)
+async fn check_deviation(bid_text: String, req_text: String) -> Result<DeviationReport, String> {
+    spawn_blocking_cmd(move || deviation::check_deviation(&bid_text, &req_text)).await
 }
 
 #[tauri::command]
-fn check_deviation_files(bid_path: String, req_path: String) -> Result<DeviationReport, String> {
-    let bid_text = parser::parse_document(&bid_path).map_err(|e| e.to_string())?;
-    let req_text = parser::parse_document(&req_path).map_err(|e| e.to_string())?;
-    Ok(deviation::check_deviation(&bid_text, &req_text))
+async fn check_deviation_files(bid_path: String, req_path: String) -> Result<DeviationReport, String> {
+    crate::utils::validate_path(&bid_path).map_err(|e| e.to_string())?;
+    crate::utils::validate_path(&req_path).map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || {
+        let bid_text = parser::parse_document(&bid_path).map_err(|e| e.to_string())?;
+        let req_text = parser::parse_document(&req_path).map_err(|e| e.to_string())?;
+        Ok(deviation::check_deviation(&bid_text, &req_text))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn check_deviation_items(
+    req_items: Vec<crate::models::RequirementItem>,
+    bid_text: String,
+) -> Result<DeviationReport, String> {
+    spawn_blocking_cmd(move || deviation::check_deviation_items(&req_items, &bid_text)).await
 }
 
 // --- 脱敏命令 ---
@@ -419,8 +468,8 @@ fn write_clipboard_text(text: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn check_fatal_risks_text(text: String) -> Vec<crate::models::FatalRisk> {
-    deviation::check_fatal_risks(&text)
+async fn check_fatal_risks_text(text: String) -> Result<Vec<crate::models::FatalRisk>, String> {
+    spawn_blocking_cmd(move || deviation::check_fatal_risks(&text)).await
 }
 
 #[tauri::command]
@@ -439,8 +488,247 @@ fn export_deviation_report_json(report: crate::models::DeviationReport) -> Strin
 }
 
 #[tauri::command]
-fn check_punctuation(text: String) -> Vec<punctuation::PunctuationIssue> {
-    punctuation::check_punctuation(&text)
+async fn check_punctuation(text: String) -> Result<Vec<punctuation::PunctuationIssue>, String> {
+    spawn_blocking_cmd(move || punctuation::check_punctuation(&text)).await
+}
+
+#[tauri::command]
+async fn check_self_review(text: String) -> Result<SelfReviewReport, String> {
+    spawn_blocking_cmd(move || self_review::check_self_review(&text)).await
+}
+
+/// T5: 完整的投标文件自查（本地 + AI）
+#[tauri::command]
+async fn check_self_review_async(
+    state: tauri::State<'_, AppState>,
+    text: String,
+) -> Result<SelfReviewReport, String> {
+    // 1. 本地检查（重复 / 敏感信息 / 占位符 / 标点）
+    let mut report = self_review::check_self_review(&text);
+
+    // 2. AI 检查（矛盾 / 逻辑）并行执行，带 60s 超时
+    let ai = state.ai_client().map_err(|e| e.to_string())?;
+    let (contradiction_result, logic_result) = tokio::join!(
+        tokio::time::timeout(Duration::from_secs(60), ai.check_contradictions(&text)),
+        tokio::time::timeout(Duration::from_secs(60), ai.check_context_logic(&text)),
+    );
+    match contradiction_result {
+        Ok(Ok(mut issues)) => report.issues.append(&mut issues),
+        Ok(Err(e)) => log::warn!("AI 矛盾检测失败: {}", e),
+        Err(_) => log::warn!("AI 矛盾检测超时（60s），已降级为仅本地检查"),
+    }
+    match logic_result {
+        Ok(Ok(mut issues)) => report.issues.append(&mut issues),
+        Ok(Err(e)) => log::warn!("AI 逻辑检测失败: {}", e),
+        Err(_) => log::warn!("AI 逻辑检测超时（60s），已降级为仅本地检查"),
+    }
+
+    // 3. 重新编号 + 按 severity 排序
+    for (i, issue) in report.issues.iter_mut().enumerate() {
+        issue.id = (i + 1) as i64;
+    }
+    report.issues.sort_by_key(|i| match i.severity {
+        crate::models::Severity::Error => 0,
+        crate::models::Severity::Warning => 1,
+        crate::models::Severity::Info => 2,
+    });
+
+    Ok(report)
+}
+
+#[tauri::command]
+fn apply_self_review_fixes(
+    file_path: String,
+    issues: Vec<crate::models::SelfReviewIssue>,
+    mode: crate::models::FixMode,
+) -> Result<crate::models::FixResult, String> {
+    crate::utils::validate_path(&file_path).map_err(|e| e.to_string())?;
+    crate::apply_self_review_fixes::apply_self_review_fixes(&file_path, &issues, mode)
+        .map_err(|e| e.to_string())
+}
+
+// --- Phase 2: 智能生成命令 ---
+
+#[tauri::command]
+async fn generate_outline(
+    state: tauri::State<'_, AppState>,
+    requirements_text: String,
+    doc_type: crate::models::DocumentType,
+) -> Result<Vec<crate::models::CardOutline>, String> {
+    // 从知识库检索相关素材
+    let mut refs: Vec<String> = vec![];
+    if let Some(search) = state.search.as_ref() {
+        // 简单提取前几个关键词组合进行搜索
+        let queries: Vec<&str> = requirements_text.split_whitespace().take(5).collect();
+        for q in queries {
+            if q.len() >= 2 {
+                match search.search(q, 2).await {
+                    Ok(results) => {
+                        for r in results {
+                            if !r.content.is_empty() {
+                                refs.push(format!("{}
+{}", r.title, r.content));
+                            }
+                        }
+                    }
+                    Err(e) => log::warn!("知识库搜索失败: {}", e),
+                }
+            }
+        }
+        refs.sort();
+        refs.dedup();
+        refs.truncate(5);
+    }
+
+    let ai = state.ai_client().map_err(|e| e.to_string())?;
+    ai.generate_outline(&requirements_text, doc_type, &refs)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn generate_card(
+    state: tauri::State<'_, AppState>,
+    outline: crate::models::CardOutline,
+    requirements_text: String,
+    _references: Vec<String>,
+    doc_type: crate::models::DocumentType,
+    global_params: Option<crate::models::GlobalParams>,
+) -> Result<crate::models::Card, String> {
+    // 从知识库搜索相关素材
+    let mut refs: Vec<String> = vec![];
+    let mut source_files: Vec<String> = vec![];
+    if let Some(search) = state.search.as_ref() {
+        match search.search(&outline.title, 3).await {
+            Ok(results) => {
+                for r in results {
+                    if !r.content.is_empty() {
+                        refs.push(format!("{}
+{}", r.title, r.content));
+                    }
+                    if let Some(sf) = r.source_file {
+                        if !sf.is_empty() {
+                            source_files.push(sf);
+                        }
+                    }
+                }
+            }
+            Err(e) => log::warn!("知识库搜索失败: {}", e),
+        }
+    }
+    source_files.sort();
+    source_files.dedup();
+
+    let ai = state.ai_client().map_err(|e| e.to_string())?;
+    let (content, risk_flags) = ai
+        .generate_chapter(&outline.title, &outline.chapter, &requirements_text, &refs, doc_type, global_params.as_ref())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // 提取 [PARAM:xxx] 占位符
+    let param_placeholders = crate::ai::extract_param_placeholders(&content);
+
+    Ok(crate::models::Card {
+        id: outline.id,
+        chapter: outline.chapter,
+        title: outline.title,
+        content,
+        source_refs: source_files,
+        document_target: outline.document_target,
+        status: crate::models::CardStatus::Draft,
+        generated_by: "ai".to_string(),
+        related_cards: vec![],
+        param_placeholders,
+        risk_flags,
+    })
+}
+
+#[tauri::command]
+fn save_cards(
+    state: tauri::State<'_, AppState>,
+    document_target: String,
+    cards: Vec<crate::models::Card>,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.save_cards(&document_target, &cards).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_cards(
+    state: tauri::State<'_, AppState>,
+    document_target: String,
+) -> Result<Vec<crate::models::Card>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_cards(&document_target).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_card(
+    state: tauri::State<'_, AppState>,
+    _document_target: String,
+    card: crate::models::Card,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.update_card(&card).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn confirm_all_cards(
+    state: tauri::State<'_, AppState>,
+    document_target: String,
+) -> Result<(), String> {
+    if document_target == "business" {
+        return Err("商务卡片涉及敏感条款，必须逐张审核，不支持一键确认".to_string());
+    }
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let mut cards = db.get_cards(&document_target).map_err(|e| e.to_string())?;
+    for card in cards.iter_mut() {
+        if card.status == crate::models::CardStatus::Draft {
+            card.status = crate::models::CardStatus::Confirmed;
+        }
+    }
+    db.save_cards(&document_target, &cards).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn check_consistency(
+    state: tauri::State<'_, AppState>,
+    cards: Vec<crate::models::Card>,
+) -> Result<crate::models::ConsistencyReport, String> {
+    let ai = state.ai_client().map_err(|e| e.to_string())?;
+    ai.check_consistency(&cards)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_global_params(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<crate::models::GlobalParams>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_global_params().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn save_global_params(
+    state: tauri::State<'_, AppState>,
+    params: crate::models::GlobalParams,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.save_global_params(&params).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn check_cross_document_consistency(
+    state: tauri::State<'_, AppState>,
+    global_params: crate::models::GlobalParams,
+    technical_cards: Vec<crate::models::Card>,
+    business_cards: Vec<crate::models::Card>,
+) -> Result<crate::models::ConsistencyReport, String> {
+    let ai = state.ai_client().map_err(|e| e.to_string())?;
+    ai.check_cross_document_consistency(&global_params, &technical_cards, &business_cards)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // --- 应用入口 ---
@@ -477,14 +765,48 @@ fn main() {
                 }
             };
 
-            let ai = AiClient::new(app_config.to_ai_config());
+            let ai = AiClient::new(app_config.to_ai_config()).unwrap_or_else(|e| {
+                log::warn!("AI 客户端初始化失败（URL 校验不通过）: {}，使用默认配置重试", e);
+                let default = config::AppConfig::default();
+                AiClient::new(default.to_ai_config()).unwrap_or_else(|e2| {
+                    log::warn!("默认配置也无法通过 URL 校验: {}，AI 功能将不可用，请前往设置配置有效的 AI 地址", e2);
+                    // 降级：使用公网地址创建 client（不会实际工作，但保证应用能启动）
+                    AiClient::new(AiConfig {
+                        provider: AiProvider::Ollama,
+                        base_url: "https://api.openai.com".to_string(),
+                        model: "dummy".to_string(),
+                        api_key: None,
+                        timeout_secs: None,
+                    }).expect("降级配置应合法")
+                })
+            });
 
             app.manage(AppState {
                 db: Arc::new(Mutex::new(db)),
                 search,
                 ai: Mutex::new(ai),
                 config_path,
+
             });
+
+            let app_handle = app.handle().clone();
+            let window = app.get_webview_window("main").unwrap();
+            window.on_window_event(move |event| {
+                let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event else { return; };
+                if paths.is_empty() { return; }
+                let files: Vec<serde_json::Value> = paths.iter().filter_map(|path| {
+                    let path_str = path.to_string_lossy().to_string();
+                    if crate::utils::validate_path(&path_str).is_err() {
+                        return None;
+                    }
+                    let name = path.file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    Some(serde_json::json!({ "path": path_str, "name": name }))
+                }).collect();
+                let _ = app_handle.emit("file-dropped", serde_json::json!({ "files": files }));
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -509,6 +831,7 @@ fn main() {
             detect_document_type,
             check_deviation,
             check_deviation_files,
+            check_deviation_items,
             desensitize_text,
             analyze_desensitize,
             write_clipboard_html,
@@ -518,7 +841,76 @@ fn main() {
             export_deviation_report_html,
             export_deviation_report_json,
             check_punctuation,
+            check_self_review,
+            check_self_review_async,
+            apply_self_review_fixes,
+            generate_outline,
+            generate_card,
+            save_cards,
+            get_cards,
+            update_card,
+            confirm_all_cards,
+            check_consistency,
+            get_global_params,
+            save_global_params,
+            check_cross_document_consistency,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_document_blocks_path_traversal() {
+        let res = parse_document("../../../etc/passwd".to_string());
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("非法文件路径"));
+    }
+
+    #[test]
+    fn test_parse_document_blocks_empty_path() {
+        let res = parse_document("".to_string());
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("路径不能为空"));
+    }
+
+    #[test]
+    fn test_parse_document_blocks_system_path() {
+        let res = parse_document("/etc/passwd".to_string());
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("非法文件路径"));
+    }
+
+    #[test]
+    fn test_parse_requirement_file_blocks_path_traversal() {
+        let res = parse_requirement_file("../secret.docx".to_string());
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("非法文件路径"));
+    }
+
+    #[tokio::test]
+    async fn test_check_deviation_files_blocks_path_traversal() {
+        let res = check_deviation_files(
+            "../../../etc/passwd".to_string(),
+            "../secret.docx".to_string(),
+        )
+        .await;
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(err.contains("非法文件路径"));
+    }
+
+    #[test]
+    fn test_apply_self_review_fixes_blocks_path_traversal() {
+        let res = apply_self_review_fixes(
+            "../template.docx".to_string(),
+            vec![],
+            crate::models::FixMode::Copy,
+        );
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("非法文件路径"));
+    }
 }

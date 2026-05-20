@@ -11,6 +11,7 @@ pub struct SearchEngine {
 
 impl SearchEngine {
     pub fn new(host: &str, api_key: Option<&str>) -> Result<Self> {
+        crate::ai::validate_ai_url(host)?;
         let client = Client::new(host, api_key).map_err(|e| AppError::Search(e.to_string()))?;
         Ok(Self {
             client,
@@ -58,6 +59,7 @@ impl SearchEngine {
                 project_phase: hit.result.project_phase,
                 tags: hit.result.tags,
                 relevance: hit.ranking_score.unwrap_or(0.0),
+                source_file: hit.result.source_file,
             })
             .collect();
         Ok(hits)
@@ -81,6 +83,7 @@ struct SearchDoc {
     content_module: Option<ContentModule>,
     project_phase: Option<ProjectPhase>,
     tags: Vec<String>,
+    source_file: Option<String>,
 }
 
 impl From<Template> for SearchDoc {
@@ -94,6 +97,7 @@ impl From<Template> for SearchDoc {
             content_module: t.content_module,
             project_phase: t.project_phase,
             tags: t.tags,
+            source_file: t.source_file,
         }
     }
 }
