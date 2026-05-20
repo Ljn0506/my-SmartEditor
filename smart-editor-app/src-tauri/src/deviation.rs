@@ -95,6 +95,39 @@ pub fn find_response(req: &RequirementItem, paragraphs: &[&str]) -> Option<Respo
     best
 }
 
+/// 段落关键词倒排索引 — 将 O(n*m) 扫描降为 O(n+m) 候选查找
+struct ParagraphIndex {
+    keyword_to_paras: std::collections::HashMap<String, Vec<usize>>,
+}
+
+impl ParagraphIndex {
+    fn new(paragraphs: &[&str]) -> Self {
+        let mut keyword_to_paras = std::collections::HashMap::new();
+        for (idx, para) in paragraphs.iter().enumerate() {
+            let keywords = extract_keywords(para);
+            for kw in keywords {
+                keyword_to_paras.entry(kw).or_insert_with(Vec::new).push(idx);
+            }
+        }
+        Self { keyword_to_paras }
+    }
+
+    /// 返回按匹配关键词数量降序排列的候选段落索引
+    fn find_candidates(&self, req_keywords: &[String]) -> Vec<usize> {
+        let mut counts = std::collections::HashMap::new();
+        for kw in req_keywords {
+            if let Some(indices) = self.keyword_to_paras.get(kw) {
+                for &idx in indices {
+                    *counts.entry(idx).or_insert(0) += 1;
+                }
+            }
+        }
+        let mut candidates: Vec<_> = counts.into_iter().collect();
+        candidates.sort_by_key(|b| std::cmp::Reverse(b.1));
+        candidates.into_iter().map(|(idx, _)| idx).collect()
+    }
+}
+
 #[derive(Debug, Clone)]
 struct NumericValue {
     value: f64,
@@ -207,6 +240,7 @@ pub fn check_deviation_items(req_items: &[RequirementItem], bid_text: &str) -> D
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .collect();
+    let para_index = ParagraphIndex::new(&paragraphs);
     let mut items = Vec::new();
     let mut none_count = 0usize;
     let mut positive_count = 0usize;
@@ -215,7 +249,36 @@ pub fn check_deviation_items(req_items: &[RequirementItem], bid_text: &str) -> D
     let mut fatal_risk_count = 0usize;
 
     for req in req_items {
-        let result = if let Some(resp) = find_response(req, &paragraphs) {
+        let candidates = para_index.find_candidates(&req.keywords);
+        let mut best: Option<ResponseMatch> = None;
+        if candidates.is_empty() {
+            // 倒排索引无候选时回退到全量扫描（保守策略）
+            best = find_response(req, &paragraphs);
+        } else {
+            for idx in candidates.iter().take(20) {
+            let para = paragraphs[*idx];
+            let score = calc_relevance(&req.keywords, para);
+            if score > 0.0 {
+                if let Some(ref current) = best {
+                    if score > current.relevance_score {
+                        best = Some(ResponseMatch {
+                            paragraph_index: *idx,
+                            text: para.to_string(),
+                            relevance_score: score,
+                        });
+                    }
+                } else {
+                    best = Some(ResponseMatch {
+                        paragraph_index: *idx,
+                        text: para.to_string(),
+                        relevance_score: score,
+                    });
+                }
+            }
+        }
+        }
+
+        let result = if let Some(resp) = best {
             judge_deviation(req, &resp)
         } else {
             DeviationCheckResult {
@@ -889,5 +952,41 @@ mod tests {
         assert_eq!(report.total, 1);
         assert_eq!(report.major_count, 1);
         assert_eq!(report.fatal_risk_count, 1);
+    }
+
+    // ── 倒排索引边界测试 ──
+
+    #[test]
+    fn test_check_deviation_empty_paragraphs_skipped() {
+        // 投标文本含大量空行，应正确过滤并匹配到有效段落
+        let bid_text = "\n\n\n我公司具备独立法人资格，完全响应。\n\n\n完全满足招标要求。\n\n";
+        let req_text = "1. 资质要求\n投标人必须具备法人资格。";
+        let report = check_deviation(bid_text, req_text);
+        assert_eq!(report.total, 1);
+        assert_eq!(report.none_count, 1);
+        assert_eq!(report.items[0].paragraph_index, Some(0));
+    }
+
+    #[test]
+    fn test_check_deviation_duplicate_paragraphs() {
+        // 多个完全相同的段落，倒排索引应能匹配到其中一个
+        let bid_text = "我公司具备独立法人资格，完全响应。\n我公司具备独立法人资格，完全响应。\n我公司具备独立法人资格，完全响应。";
+        let req_text = "1. 资质要求\n投标人必须具备法人资格。";
+        let report = check_deviation(bid_text, req_text);
+        assert_eq!(report.total, 1);
+        assert_eq!(report.none_count, 1);
+        assert!(report.items[0].paragraph_index.is_some());
+    }
+
+    #[test]
+    fn test_check_deviation_extra_long_paragraph() {
+        // 超长段落（>500 字符）的索引和匹配应正常
+        let long_para = "我公司具备独立法人资格，完全响应。".repeat(50);
+        let bid_text = format!("{}\n完全满足招标要求。", long_para);
+        let req_text = "1. 资质要求\n投标人必须具备法人资格。";
+        let report = check_deviation(&bid_text, req_text);
+        assert_eq!(report.total, 1);
+        assert_eq!(report.none_count, 1);
+        assert_eq!(report.items[0].paragraph_index, Some(0));
     }
 }

@@ -164,35 +164,30 @@ fn check_repetition(text: &str, issues: &mut Vec<SelfReviewIssue>, mut next_id: 
     next_id
 }
 
-/// 简化版相似度：公共子串长度 / max(len_a, len_b)
+/// 提取字符 n-gram（用于近似相似度）
+fn char_ngrams(s: &str, n: usize) -> Vec<String> {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() < n {
+        return vec![s.to_string()];
+    }
+    chars.windows(n).map(|w| w.iter().collect()).collect()
+}
+
+/// 3-gram Jaccard 相似度 — O(n+m) 替代原 O(n²) LCS
 fn calc_similarity(a: &str, b: &str) -> f64 {
-    let a_chars: Vec<char> = a.chars().collect();
-    let b_chars: Vec<char> = b.chars().collect();
-    let len_a = a_chars.len();
-    let len_b = b_chars.len();
-    if len_a == 0 || len_b == 0 {
+    let a_grams = char_ngrams(a, 3);
+    let b_grams = char_ngrams(b, 3);
+    if a_grams.is_empty() || b_grams.is_empty() {
         return 0.0;
     }
-
-    // 最长公共子序列（LCS）简化版 — 只计算最长公共子串
-    let mut max_len = 0usize;
-    let max_i = std::cmp::min(len_a, 200);
-    let max_j = std::cmp::min(len_b, 200);
-    for i in 0..max_i {
-        for j in 0..max_j {
-            if a_chars[i] == b_chars[j] {
-                let mut l = 0usize;
-                while i + l < max_i && j + l < max_j && a_chars[i + l] == b_chars[j + l] {
-                    l += 1;
-                }
-                if l > max_len {
-                    max_len = l;
-                }
-            }
-        }
+    let a_set: std::collections::HashSet<_> = a_grams.iter().collect();
+    let b_set: std::collections::HashSet<_> = b_grams.iter().collect();
+    let intersection = a_set.intersection(&b_set).count();
+    let union = a_set.union(&b_set).count();
+    if union == 0 {
+        return 0.0;
     }
-
-    max_len as f64 / std::cmp::max(len_a, len_b) as f64
+    intersection as f64 / union as f64
 }
 
 // ── 敏感信息检测 ──
