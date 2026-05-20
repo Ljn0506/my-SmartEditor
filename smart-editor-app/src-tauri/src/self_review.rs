@@ -34,28 +34,29 @@ static SENSITIVE_PATTERNS: Lazy<Vec<(&'static str, Regex, &'static str)>> = Lazy
     ]
 });
 
-static PLACEHOLDER_PATTERNS: Lazy<Vec<(&'static str, Regex, &'static str, Severity)>> = Lazy::new(|| {
-    vec![
-        (
-            "[待补充] 占位符",
-            Regex::new(r"\[待补充\]|\[待定\]|\[待完善\]|\[待填写\]|\[待确认\]").unwrap(),
-            "请替换为实际内容",
-            Severity::Error,
-        ),
-        (
-            "XXX / ____ 占位符",
-            Regex::new(r"XXX+|_{3,}|\*{3,}|【.*?】").unwrap(),
-            "请替换为实际内容",
-            Severity::Error,
-        ),
-        (
-            "日期/金额占位符",
-            Regex::new(r"\d{4}年?\s*[-—]\s*月\s*[-—]\s*日|金额[:：]\s*[-—]+").unwrap(),
-            "请填写具体日期或金额",
-            Severity::Warning,
-        ),
-    ]
-});
+static PLACEHOLDER_PATTERNS: Lazy<Vec<(&'static str, Regex, &'static str, Severity)>> =
+    Lazy::new(|| {
+        vec![
+            (
+                "[待补充] 占位符",
+                Regex::new(r"\[待补充\]|\[待定\]|\[待完善\]|\[待填写\]|\[待确认\]").unwrap(),
+                "请替换为实际内容",
+                Severity::Error,
+            ),
+            (
+                "XXX / ____ 占位符",
+                Regex::new(r"XXX+|_{3,}|\*{3,}|【.*?】").unwrap(),
+                "请替换为实际内容",
+                Severity::Error,
+            ),
+            (
+                "日期/金额占位符",
+                Regex::new(r"\d{4}年?\s*[-—]\s*月\s*[-—]\s*日|金额[:：]\s*[-—]+").unwrap(),
+                "请填写具体日期或金额",
+                Severity::Warning,
+            ),
+        ]
+    });
 
 /// 预计算段落位置映射，避免 O(N²) 扫描
 struct ParagraphMap {
@@ -84,7 +85,10 @@ impl ParagraphMap {
             char_pos += line_char_len;
         }
 
-        Self { byte_ranges, char_ranges }
+        Self {
+            byte_ranges,
+            char_ranges,
+        }
     }
 
     fn find_by_byte(&self, pos: usize) -> Option<usize> {
@@ -206,7 +210,11 @@ fn check_sensitive_info(
                 id: next_id,
                 category: "quality".to_string(),
                 sub_category: "sensitive".to_string(),
-                message: format!("{}: {}", msg_template, &matched[..std::cmp::min(matched.len(), 30)]),
+                message: format!(
+                    "{}: {}",
+                    msg_template,
+                    &matched[..std::cmp::min(matched.len(), 30)]
+                ),
                 severity: Severity::Error,
                 position: Some(pos),
                 paragraph_index: para_map.find_by_byte(pos),
@@ -235,7 +243,11 @@ fn check_placeholders(
                 id: next_id,
                 category: "format".to_string(),
                 sub_category: "placeholder".to_string(),
-                message: format!("{}: {}", msg_template, &matched[..std::cmp::min(matched.len(), 20)]),
+                message: format!(
+                    "{}: {}",
+                    msg_template,
+                    &matched[..std::cmp::min(matched.len(), 20)]
+                ),
                 severity: *severity,
                 position: Some(mat.start()),
                 paragraph_index: para_map.find_by_byte(mat.start()),
@@ -327,8 +339,23 @@ fn check_context_logic(
     let paragraphs: Vec<&str> = non_empty_paragraphs(text);
 
     let connectives = [
-        "因此", "此外", "然而", "但是", "同时", "另外", "其次", "最后", "综上所述",
-        "首先", "综上", "总之", "所以", "于是", "接着", "然后", "而",
+        "因此",
+        "此外",
+        "然而",
+        "但是",
+        "同时",
+        "另外",
+        "其次",
+        "最后",
+        "综上所述",
+        "首先",
+        "综上",
+        "总之",
+        "所以",
+        "于是",
+        "接着",
+        "然后",
+        "而",
     ];
 
     let mut char_offset = 0usize;
@@ -345,9 +372,7 @@ fn check_context_logic(
                 position: Some(char_offset),
                 paragraph_index: Some(idx),
                 original: None,
-                suggestion: Some(
-                    "在段落开头添加过渡词，如'因此'、'此外'、'然而'等".to_string(),
-                ),
+                suggestion: Some("在段落开头添加过渡词，如'因此'、'此外'、'然而'等".to_string()),
                 auto_fixable: false,
             });
             next_id += 1;
@@ -371,7 +396,9 @@ mod tests {
             .filter(|i| i.sub_category == "placeholder")
             .collect();
         assert!(!placeholders.is_empty(), "应检测到占位符");
-        assert!(placeholders.iter().any(|i| i.original.as_ref().unwrap().contains("[待补充]")));
+        assert!(placeholders
+            .iter()
+            .any(|i| i.original.as_ref().unwrap().contains("[待补充]")));
     }
 
     #[test]
@@ -479,8 +506,11 @@ mod tests {
 这是一个非常长的段落，故意不包含任何连接词开头，目的是测试上下文逻辑断裂检测功能是否能正确识别并报告问题。"; // 英文逗号触发 punctuation + 长段落触发 logic + 7x24+工作日触发 contradiction
 
         let report = check_self_review(text);
-        let categories: std::collections::HashSet<_> =
-            report.issues.iter().map(|i| i.sub_category.clone()).collect();
+        let categories: std::collections::HashSet<_> = report
+            .issues
+            .iter()
+            .map(|i| i.sub_category.clone())
+            .collect();
 
         for expected in [
             "repetition",
@@ -516,14 +546,8 @@ mod tests {
             "SelfReviewReport 应包含 punctuation issue"
         );
         for issue in &punct {
-            assert_eq!(
-                issue.category, "format",
-                "punctuation 必须归类到 format"
-            );
-            assert!(
-                issue.auto_fixable,
-                "punctuation 必须 auto_fixable=true"
-            );
+            assert_eq!(issue.category, "format", "punctuation 必须归类到 format");
+            assert!(issue.auto_fixable, "punctuation 必须 auto_fixable=true");
             assert!(
                 issue.suggestion.as_ref().is_some_and(|s| !s.is_empty()),
                 "punctuation 必须提供 suggestion（规范化后的标点）"

@@ -37,7 +37,12 @@ impl SearchEngine {
         Ok(())
     }
 
-    pub async fn search(&self, query: &str, limit: usize, offset: Option<usize>) -> Result<Vec<SearchResult>> {
+    pub async fn search(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: Option<usize>,
+    ) -> Result<Vec<SearchResult>> {
         let index = self.client.index(&self.index_name);
         let mut search = index.search();
         search.with_query(query).with_limit(limit);

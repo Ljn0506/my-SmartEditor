@@ -28,8 +28,8 @@ use crate::ai::AiClient;
 use crate::db::Database;
 use crate::desensitize::DesensitizeHit;
 use crate::models::{
-    AiConfig, AiProvider, DeviationReport, DocumentType, ParsedDocument, ParsedDocumentStructured, ParsedRequirements,
-    SearchResult, SelfReviewReport, Template,
+    AiConfig, AiProvider, DeviationReport, DocumentType, ParsedDocument, ParsedDocumentStructured,
+    ParsedRequirements, SearchResult, SelfReviewReport, Template,
 };
 use crate::nas_scanner::{scan_directory, ImportResult};
 use crate::search::SearchEngine;
@@ -39,12 +39,14 @@ pub struct AppState {
     search: Option<SearchEngine>,
     ai: Mutex<AiClient>,
     config_path: PathBuf,
-
 }
 
 impl AppState {
     fn ai_client(&self) -> Result<AiClient, String> {
-        let guard = self.ai.lock().map_err(|e| format!("AI 客户端锁定失败: {}", e))?;
+        let guard = self
+            .ai
+            .lock()
+            .map_err(|e| format!("AI 客户端锁定失败: {}", e))?;
         Ok(guard.clone())
     }
 }
@@ -377,7 +379,9 @@ async fn import_nas_files(
         .into_iter()
         .filter(|t| {
             t.id.is_some()
-                && t.source_file.as_ref().is_none_or(|sf| !failed_files.contains(sf))
+                && t.source_file
+                    .as_ref()
+                    .is_none_or(|sf| !failed_files.contains(sf))
         })
         .collect();
 
@@ -412,7 +416,9 @@ where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
 {
-    tokio::task::spawn_blocking(f).await.map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // --- 偏离检查命令 ---
@@ -423,7 +429,10 @@ async fn check_deviation(bid_text: String, req_text: String) -> Result<Deviation
 }
 
 #[tauri::command]
-async fn check_deviation_files(bid_path: String, req_path: String) -> Result<DeviationReport, String> {
+async fn check_deviation_files(
+    bid_path: String,
+    req_path: String,
+) -> Result<DeviationReport, String> {
     crate::utils::validate_path(&bid_path).map_err(|e| e.to_string())?;
     crate::utils::validate_path(&req_path).map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
@@ -578,8 +587,11 @@ async fn generate_outline(
                     Ok(results) => {
                         for r in results {
                             if !r.content.is_empty() {
-                                refs.push(format!("{}
-{}", r.title, r.content));
+                                refs.push(format!(
+                                    "{}
+{}",
+                                    r.title, r.content
+                                ));
                             }
                         }
                     }
@@ -615,8 +627,11 @@ async fn generate_card(
             Ok(results) => {
                 for r in results {
                     if !r.content.is_empty() {
-                        refs.push(format!("{}
-{}", r.title, r.content));
+                        refs.push(format!(
+                            "{}
+{}",
+                            r.title, r.content
+                        ));
                     }
                     if let Some(sf) = r.source_file {
                         if !sf.is_empty() {
@@ -633,7 +648,14 @@ async fn generate_card(
 
     let ai = state.ai_client().map_err(|e| e.to_string())?;
     let (content, risk_flags) = ai
-        .generate_chapter(&outline.title, &outline.chapter, &requirements_text, &refs, doc_type, global_params.as_ref())
+        .generate_chapter(
+            &outline.title,
+            &outline.chapter,
+            &requirements_text,
+            &refs,
+            doc_type,
+            global_params.as_ref(),
+        )
         .await
         .map_err(|e| e.to_string())?;
 
@@ -662,7 +684,8 @@ fn save_cards(
     cards: Vec<crate::models::Card>,
 ) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.save_cards(&document_target, &cards).map_err(|e| e.to_string())
+    db.save_cards(&document_target, &cards)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -699,7 +722,8 @@ fn confirm_all_cards(
             card.status = crate::models::CardStatus::Confirmed;
         }
     }
-    db.save_cards(&document_target, &cards).map_err(|e| e.to_string())
+    db.save_cards(&document_target, &cards)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

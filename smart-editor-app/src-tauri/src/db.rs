@@ -69,7 +69,10 @@ impl Database {
             "ALTER TABLE cards ADD COLUMN IF NOT EXISTS risk_flags TEXT NOT NULL DEFAULT '[]'",
             [],
         ) {
-            log::warn!("ALTER TABLE cards ADD COLUMN risk_flags 失败（可能已存在）: {}", e);
+            log::warn!(
+                "ALTER TABLE cards ADD COLUMN risk_flags 失败（可能已存在）: {}",
+                e
+            );
         }
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS global_params (
@@ -292,7 +295,10 @@ impl Database {
         }
         // 清理不在新列表中的旧卡片
         if cards.is_empty() {
-            tx.execute("DELETE FROM cards WHERE document_target = ?1", [document_target])?;
+            tx.execute(
+                "DELETE FROM cards WHERE document_target = ?1",
+                [document_target],
+            )?;
         } else {
             let ids: Vec<&str> = cards.iter().map(|c| c.id.as_str()).collect();
             let placeholders = (0..ids.len()).map(|_| "?").collect::<Vec<_>>().join(",");
@@ -315,7 +321,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, chapter, title, content, source_refs, document_target,
                     status, generated_by, related_cards, param_placeholders, risk_flags
-             FROM cards WHERE document_target = ?1 ORDER BY chapter"
+             FROM cards WHERE document_target = ?1 ORDER BY chapter",
         )?;
         let rows = stmt.query_map([document_target], |row| {
             let source_refs_str: String = row.get(4)?;
@@ -397,13 +403,15 @@ impl Database {
     }
 
     pub fn get_global_params(&self) -> Result<Option<crate::models::GlobalParams>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT value FROM global_params WHERE key = 'default'"
-        )?;
-        let result = stmt.query_row([], |row| {
-            let value: String = row.get(0)?;
-            Ok(value)
-        }).optional()?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT value FROM global_params WHERE key = 'default'")?;
+        let result = stmt
+            .query_row([], |row| {
+                let value: String = row.get(0)?;
+                Ok(value)
+            })
+            .optional()?;
         match result {
             Some(value) => {
                 let params = serde_json::from_str(&value)

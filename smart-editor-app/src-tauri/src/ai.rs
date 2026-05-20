@@ -8,14 +8,18 @@ use crate::utils::is_private_ip;
 
 /// 校验 AI base_url 的 host，阻止 SSRF（内网 IP、localhost、link-local、DNS rebinding）
 pub(crate) fn validate_ai_url(url: &str) -> Result<()> {
-    let parsed = url.parse::<reqwest::Url>()
+    let parsed = url
+        .parse::<reqwest::Url>()
         .map_err(|e| AppError::Validation(format!("无效的 API 地址: {}", e)))?;
-    let host = parsed.host_str()
+    let host = parsed
+        .host_str()
         .ok_or_else(|| AppError::Validation("API 地址缺少 host".to_string()))?;
     let host_lower = host.to_lowercase();
 
     if host_lower == "localhost" {
-        return Err(AppError::Validation("不允许使用 localhost 作为 API 地址".to_string()));
+        return Err(AppError::Validation(
+            "不允许使用 localhost 作为 API 地址".to_string(),
+        ));
     }
 
     let host_clean = host_lower
@@ -25,7 +29,9 @@ pub(crate) fn validate_ai_url(url: &str) -> Result<()> {
 
     if let Ok(ip) = host_clean.parse::<std::net::IpAddr>() {
         if is_private_ip(ip) {
-            return Err(AppError::Validation("不允许使用内网或本地地址作为 API 地址".to_string()));
+            return Err(AppError::Validation(
+                "不允许使用内网或本地地址作为 API 地址".to_string(),
+            ));
         }
         return Ok(());
     }
@@ -46,15 +52,24 @@ pub(crate) fn validate_ai_url(url: &str) -> Result<()> {
     let addrs = match rx.recv_timeout(Duration::from_secs(3)) {
         Ok(Ok(addrs)) => addrs,
         Ok(Err(e)) => {
-            return Err(AppError::Validation(format!("无法解析域名 {}: {}", host_clean, e)))
+            return Err(AppError::Validation(format!(
+                "无法解析域名 {}: {}",
+                host_clean, e
+            )))
         }
         Err(_) => {
-            return Err(AppError::Validation(format!("域名 {} 解析超时", host_clean)))
+            return Err(AppError::Validation(format!(
+                "域名 {} 解析超时",
+                host_clean
+            )))
         }
     };
 
     if addrs.is_empty() {
-        return Err(AppError::Validation(format!("域名 {} 解析结果为空", host_clean)));
+        return Err(AppError::Validation(format!(
+            "域名 {} 解析结果为空",
+            host_clean
+        )));
     }
 
     for ip in addrs {
@@ -176,16 +191,17 @@ impl AiClient {
         for (k, v) in headers {
             req = req.header(k, v);
         }
-        let res = req.send().await.map_err(|_| {
-            AppError::Ai("AI 请求发送失败，请检查网络或 API 地址".to_string())
-        })?;
+        let res = req
+            .send()
+            .await
+            .map_err(|_| AppError::Ai("AI 请求发送失败，请检查网络或 API 地址".to_string()))?;
         let res = res.error_for_status().map_err(|e| {
             let status = e.status().map(|s| s.to_string()).unwrap_or_default();
             AppError::Ai(format!("AI 请求失败 ({}), 请检查配置或重试", status))
         })?;
-        res.json().await.map_err(|_| {
-            AppError::Ai("AI 响应解析失败，请检查模型或重试".to_string())
-        })
+        res.json()
+            .await
+            .map_err(|_| AppError::Ai("AI 响应解析失败，请检查模型或重试".to_string()))
     }
 
     async fn chat_claude(&self, prompt: &str) -> Result<String> {
@@ -262,7 +278,10 @@ impl AiClient {
         let json_str = extract_json_array(&response)?;
         let items: Vec<AiReviewItem> = serde_json::from_str(json_str)
             .map_err(|e| AppError::Ai(format!("矛盾检测 JSON 解析失败: {}", e)))?;
-        Ok(items.into_iter().map(|it| it.to_issue("contradiction")).collect())
+        Ok(items
+            .into_iter()
+            .map(|it| it.to_issue("contradiction"))
+            .collect())
     }
 
     /// T5: 检测上下文逻辑断裂（AI）
@@ -313,7 +332,8 @@ impl AiClient {
         let json_str = extract_json_array(&response)?;
         let items: Vec<ConsistencyItem> = serde_json::from_str(json_str)
             .map_err(|e| AppError::Ai(format!("一致性检查 JSON 解析失败: {}", e)))?;
-        let issues: Vec<crate::models::ConsistencyIssue> = items.into_iter().map(to_consistency_issue).collect();
+        let issues: Vec<crate::models::ConsistencyIssue> =
+            items.into_iter().map(to_consistency_issue).collect();
         Ok(crate::models::ConsistencyReport {
             total_checked: cards.len(),
             issues,
@@ -331,7 +351,14 @@ impl AiClient {
         global_params: Option<&crate::models::GlobalParams>,
     ) -> Result<(String, Vec<String>)> {
         let is_business = matches!(doc_type, DocumentType::Business);
-        let prompt = build_chapter_prompt(title, chapter, requirements, references, doc_type, global_params);
+        let prompt = build_chapter_prompt(
+            title,
+            chapter,
+            requirements,
+            references,
+            doc_type,
+            global_params,
+        );
         let response = self.chat(&prompt).await?;
 
         let (content, risk_flags) = if is_business {
@@ -350,12 +377,14 @@ impl AiClient {
         technical_cards: &[crate::models::Card],
         business_cards: &[crate::models::Card],
     ) -> Result<crate::models::ConsistencyReport> {
-        let prompt = build_cross_doc_consistency_prompt(global_params, technical_cards, business_cards);
+        let prompt =
+            build_cross_doc_consistency_prompt(global_params, technical_cards, business_cards);
         let response = self.chat(&prompt).await?;
         let json_str = extract_json_array(&response)?;
         let items: Vec<ConsistencyItem> = serde_json::from_str(json_str)
             .map_err(|e| AppError::Ai(format!("跨文档一致性检查 JSON 解析失败: {}", e)))?;
-        let issues: Vec<crate::models::ConsistencyIssue> = items.into_iter().map(to_consistency_issue).collect();
+        let issues: Vec<crate::models::ConsistencyIssue> =
+            items.into_iter().map(to_consistency_issue).collect();
         Ok(crate::models::ConsistencyReport {
             total_checked: technical_cards.len() + business_cards.len(),
             issues,
@@ -379,7 +408,8 @@ fn to_consistency_issue(it: ConsistencyItem) -> crate::models::ConsistencyIssue 
         expected_value: it.expected_value,
         actual_value: it.actual_value,
         location: it.location,
-        severity: crate::models::Severity::from_str(&it.severity).unwrap_or(crate::models::Severity::Info),
+        severity: crate::models::Severity::from_str(&it.severity)
+            .unwrap_or(crate::models::Severity::Info),
     }
 }
 
@@ -670,7 +700,11 @@ fn build_consistency_prompt(cards: &[crate::models::Card]) -> String {
     )
 }
 
-fn build_outline_prompt(requirements: &str, doc_type: DocumentType, references: &[String]) -> String {
+fn build_outline_prompt(
+    requirements: &str,
+    doc_type: DocumentType,
+    references: &[String],
+) -> String {
     let doc_type_desc = match doc_type {
         crate::models::DocumentType::Technical => "技术方案",
         crate::models::DocumentType::Business => "商务响应文档",
@@ -678,11 +712,13 @@ fn build_outline_prompt(requirements: &str, doc_type: DocumentType, references: 
     let refs = if references.is_empty() {
         "暂无参考资料".to_string()
     } else {
-        references.join("
+        references.join(
+            "
 
 ---
 
-")
+",
+        )
     };
     format!(
         r#"你是一位资深投标专家，擅长编写{}的章节结构。
@@ -708,7 +744,8 @@ fn build_outline_prompt(requirements: &str, doc_type: DocumentType, references: 
   {{"chapter": "2", "title": "需求分析"}},
   {{"chapter": "3.1", "title": "系统架构设计"}}
 ]"#,
-        doc_type_desc, doc_type_desc,
+        doc_type_desc,
+        doc_type_desc,
         requirements.chars().take(6000).collect::<String>(),
         refs.chars().take(4000).collect::<String>()
     )
@@ -725,11 +762,13 @@ fn build_chapter_prompt(
     let refs = if references.is_empty() {
         "暂无参考资料".to_string()
     } else {
-        references.join("
+        references.join(
+            "
 
 ---
 
-")
+",
+        )
     };
     let doc_type_desc = match doc_type {
         crate::models::DocumentType::Technical => "技术方案",
@@ -970,9 +1009,7 @@ fn validate_requirements(parsed: &crate::models::ParsedRequirements) -> Result<(
             )));
         }
         if req.text.trim().is_empty() {
-            return Err(AppError::Validation(
-                "需求项 text 不能为空".to_string(),
-            ));
+            return Err(AppError::Validation("需求项 text 不能为空".to_string()));
         }
     }
     for req in &parsed.business_requirements {
@@ -1195,9 +1232,11 @@ mod tests {
     async fn test_chat_post_json_success() {
         let mock_server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "choices": [{"message": {"content": "hello"}}]
-            })))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "choices": [{"message": {"content": "hello"}}]
+                })),
+            )
             .mount(&mock_server)
             .await;
 
@@ -1232,7 +1271,9 @@ mod tests {
     async fn test_chat_post_json_non_200_status() {
         let mock_server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
-            .respond_with(wiremock::ResponseTemplate::new(500).set_body_string("Internal Server Error"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(500).set_body_string("Internal Server Error"),
+            )
             .mount(&mock_server)
             .await;
 
@@ -1258,7 +1299,11 @@ mod tests {
         assert!(result.is_err());
         let err = format!("{}", result.unwrap_err());
         assert!(err.contains("500"), "错误消息应包含状态码 500: {}", err);
-        assert!(err.contains("AI 请求失败"), "错误消息应提示 AI 请求失败: {}", err);
+        assert!(
+            err.contains("AI 请求失败"),
+            "错误消息应提示 AI 请求失败: {}",
+            err
+        );
     }
 
     #[tokio::test]
@@ -1266,8 +1311,7 @@ mod tests {
         let mock_server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .respond_with(
-                wiremock::ResponseTemplate::new(200)
-                    .set_delay(std::time::Duration::from_secs(5)),
+                wiremock::ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(5)),
             )
             .mount(&mock_server)
             .await;
@@ -1341,9 +1385,7 @@ mod tests {
     async fn test_chat_post_json_invalid_json_response() {
         let mock_server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
-            .respond_with(
-                wiremock::ResponseTemplate::new(200).set_body_string("not valid json"),
-            )
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("not valid json"))
             .mount(&mock_server)
             .await;
 

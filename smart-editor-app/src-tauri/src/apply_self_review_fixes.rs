@@ -35,13 +35,16 @@ pub fn apply_self_review_fixes(
     > = std::collections::HashMap::new();
     for issue in issues {
         if issue.auto_fixable {
-            if let (Some(idx), Some(ref orig), Some(ref sugg)) =
-                (issue.paragraph_index, issue.original.clone(), issue.suggestion.clone())
-            {
-                fixes_by_para
-                    .entry(idx)
-                    .or_default()
-                    .push((orig.clone(), sugg.clone(), issue.category.clone()));
+            if let (Some(idx), Some(ref orig), Some(ref sugg)) = (
+                issue.paragraph_index,
+                issue.original.clone(),
+                issue.suggestion.clone(),
+            ) {
+                fixes_by_para.entry(idx).or_default().push((
+                    orig.clone(),
+                    sugg.clone(),
+                    issue.category.clone(),
+                ));
             }
         }
     }
@@ -97,7 +100,9 @@ pub fn apply_self_review_fixes(
                                 let docx_rs::TableRowChild::TableCell(cell) = cell_child;
                                 for cell_content in &cell.children {
                                     if let docx_rs::TableCellContent::Paragraph(p) = cell_content {
-                                        para_text_before.push_str(&crate::parser::extract_paragraph_text_to_string(p));
+                                        para_text_before.push_str(
+                                            &crate::parser::extract_paragraph_text_to_string(p),
+                                        );
                                     }
                                 }
                             }
@@ -173,17 +178,16 @@ pub fn apply_self_review_fixes(
 fn paragraph_has_text(p: &docx_rs::Paragraph) -> bool {
     p.children.iter().any(|pc| {
         if let docx_rs::ParagraphChild::Run(r) = pc {
-            r.children.iter().any(|rc| matches!(rc, docx_rs::RunChild::Text(_)))
+            r.children
+                .iter()
+                .any(|rc| matches!(rc, docx_rs::RunChild::Text(_)))
         } else {
             false
         }
     })
 }
 
-fn apply_fixes_to_paragraph(
-    p: &mut docx_rs::Paragraph,
-    fixes: &[(String, String, String)],
-) {
+fn apply_fixes_to_paragraph(p: &mut docx_rs::Paragraph, fixes: &[(String, String, String)]) {
     for (orig, sugg, _category) in fixes {
         for para_child in &mut p.children {
             if let docx_rs::ParagraphChild::Run(r) = para_child {
@@ -253,7 +257,12 @@ mod tests {
     #[test]
     fn test_apply_punctuation_fixes_copy_mode() {
         let tmp_dir = tempfile::tempdir().unwrap();
-        let path = tmp_dir.path().join("test_apply_fixes_copy.docx").to_str().unwrap().to_string();
+        let path = tmp_dir
+            .path()
+            .join("test_apply_fixes_copy.docx")
+            .to_str()
+            .unwrap()
+            .to_string();
         create_test_docx(&path, "本方案,采用主流架构，具有高可用性。");
 
         let issues = vec![make_issue(0, ",", "，", true)];
@@ -289,7 +298,12 @@ mod tests {
     #[test]
     fn test_apply_overwrite_mode_creates_backup() {
         let tmp_dir = tempfile::tempdir().unwrap();
-        let path = tmp_dir.path().join("test_apply_overwrite.docx").to_str().unwrap().to_string();
+        let path = tmp_dir
+            .path()
+            .join("test_apply_overwrite.docx")
+            .to_str()
+            .unwrap()
+            .to_string();
         create_test_docx(&path, "第一段,有逗号。");
 
         let issues = vec![make_issue(0, ",", "，", true)];
@@ -300,10 +314,7 @@ mod tests {
         let fix_result = result.unwrap();
         assert_eq!(fix_result.mode, FixMode::Overwrite);
         assert_eq!(fix_result.output_path, path);
-        assert!(
-            fix_result.backup_path.is_some(),
-            "应生成备份文件"
-        );
+        assert!(fix_result.backup_path.is_some(), "应生成备份文件");
         let backup_path = fix_result.backup_path.unwrap();
         assert!(backup_path.ends_with(".bak"));
         assert!(fs::metadata(&backup_path).is_ok(), "备份文件应存在");
@@ -318,7 +329,12 @@ mod tests {
     #[test]
     fn test_apply_no_fixable_items() {
         let tmp_dir = tempfile::tempdir().unwrap();
-        let path = tmp_dir.path().join("test_no_fixes.docx").to_str().unwrap().to_string();
+        let path = tmp_dir
+            .path()
+            .join("test_no_fixes.docx")
+            .to_str()
+            .unwrap()
+            .to_string();
         create_test_docx(&path, "本方案采用主流架构。");
 
         let issues = vec![SelfReviewIssue {
@@ -341,11 +357,15 @@ mod tests {
         assert!(err.contains("没有可自动修复的项"), "错误消息应提示无修复项");
     }
 
-
     #[test]
     fn test_apply_overwrite_mode_backup_fails() {
         let tmp_dir = tempfile::tempdir().unwrap();
-        let path = tmp_dir.path().join("test_apply_overwrite_fail.docx").to_str().unwrap().to_string();
+        let path = tmp_dir
+            .path()
+            .join("test_apply_overwrite_fail.docx")
+            .to_str()
+            .unwrap()
+            .to_string();
         create_test_docx(&path, "第一段,有逗号。");
 
         // 创建一个与备份路径同名的目录，使 std::fs::copy 失败

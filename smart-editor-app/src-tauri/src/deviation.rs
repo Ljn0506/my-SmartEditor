@@ -106,7 +106,10 @@ impl ParagraphIndex {
         for (idx, para) in paragraphs.iter().enumerate() {
             let keywords = extract_keywords(para);
             for kw in keywords {
-                keyword_to_paras.entry(kw).or_insert_with(Vec::new).push(idx);
+                keyword_to_paras
+                    .entry(kw)
+                    .or_insert_with(Vec::new)
+                    .push(idx);
             }
         }
         Self { keyword_to_paras }
@@ -256,26 +259,30 @@ pub fn check_deviation_items(req_items: &[RequirementItem], bid_text: &str) -> D
             best = find_response(req, &paragraphs);
         } else {
             for idx in candidates.iter().take(20) {
-            let para = paragraphs[*idx];
-            let score = calc_relevance(&req.keywords, para);
-            if score > 0.0 {
-                if let Some(ref current) = best {
-                    if score > current.relevance_score {
+                let para = paragraphs[*idx];
+                let score = calc_relevance(&req.keywords, para);
+                if score > 0.0 {
+                    if let Some(ref current) = best {
+                        if score > current.relevance_score {
+                            best = Some(ResponseMatch {
+                                paragraph_index: *idx,
+                                text: para.to_string(),
+                                relevance_score: score,
+                            });
+                        }
+                    } else {
                         best = Some(ResponseMatch {
                             paragraph_index: *idx,
                             text: para.to_string(),
                             relevance_score: score,
                         });
                     }
-                } else {
-                    best = Some(ResponseMatch {
-                        paragraph_index: *idx,
-                        text: para.to_string(),
-                        relevance_score: score,
-                    });
                 }
             }
-        }
+            // 候选存在但全部 score ≤ 0 时回退到全量扫描
+            if best.is_none() {
+                best = find_response(req, &paragraphs);
+            }
         }
 
         let result = if let Some(resp) = best {
@@ -920,7 +927,12 @@ mod tests {
             "paragraph_index 应与 parse_document.paragraphs 索引对齐"
         );
         // 验证第二段文本确实包含匹配内容
-        let second_para = bid_text.lines().map(|s| s.trim()).filter(|s| !s.is_empty()).nth(1).unwrap();
+        let second_para = bid_text
+            .lines()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .nth(1)
+            .unwrap();
         assert!(second_para.contains("法人资格"));
     }
 

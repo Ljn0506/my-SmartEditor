@@ -5,7 +5,9 @@ pub fn validate_path(path: &str) -> Result<()> {
         return Err(AppError::Validation("路径不能为空".to_string()));
     }
     let p = std::path::Path::new(path);
-    if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+    if p.components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
         return Err(AppError::Validation("非法文件路径".to_string()));
     }
     // 阻止访问敏感系统目录（绝对路径）
@@ -26,8 +28,8 @@ fn is_sensitive_system_path(p: &std::path::Path) -> bool {
         ]
     } else {
         &[
-            "/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/dev", "/proc", "/sys",
-            "/boot", "/var/log", "/System", "/private", "/.Trash",
+            "/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/dev", "/proc", "/sys", "/boot",
+            "/var/log", "/System", "/private", "/.Trash",
         ]
     };
     for prefix in blocked {
@@ -61,9 +63,7 @@ pub fn is_private_ip(ip: std::net::IpAddr) -> bool {
                 || v4.octets() == [0, 0, 0, 0]
         }
         std::net::IpAddr::V6(v6) => {
-            v6.is_loopback()
-                || v6.is_unicast_link_local()
-                || v6.is_unique_local()
+            v6.is_loopback() || v6.is_unicast_link_local() || v6.is_unique_local()
         }
     }
 }

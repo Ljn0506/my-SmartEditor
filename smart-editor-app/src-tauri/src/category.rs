@@ -69,20 +69,24 @@ fn map_dir_to_module(dir: &str) -> Option<ContentModule> {
 }
 
 /// 路径推断：一级目录 → ProjectPhase
-fn infer_project_phase_from_path(components: &[String], root_idx: Option<usize>) -> Option<ProjectPhase> {
-    root_idx.and_then(|idx| {
-        match components.get(idx)?.as_str() {
-            "方案阶段" => Some(ProjectPhase::Proposal),
-            "投标阶段" => Some(ProjectPhase::Bidding),
-            "合同阶段" => Some(ProjectPhase::Contract),
-            "通用素材" => None,
-            _ => None,
-        }
+fn infer_project_phase_from_path(
+    components: &[String],
+    root_idx: Option<usize>,
+) -> Option<ProjectPhase> {
+    root_idx.and_then(|idx| match components.get(idx)?.as_str() {
+        "方案阶段" => Some(ProjectPhase::Proposal),
+        "投标阶段" => Some(ProjectPhase::Bidding),
+        "合同阶段" => Some(ProjectPhase::Contract),
+        "通用素材" => None,
+        _ => None,
     })
 }
 
 /// 路径推断：二级目录 → BusinessDomain
-fn infer_business_domain_from_path(components: &[String], root_idx: Option<usize>) -> Option<BusinessDomain> {
+fn infer_business_domain_from_path(
+    components: &[String],
+    root_idx: Option<usize>,
+) -> Option<BusinessDomain> {
     let idx = root_idx?;
     if components.get(idx)? == "通用素材" {
         return None;
@@ -98,10 +102,19 @@ fn infer_business_domain_from_path(components: &[String], root_idx: Option<usize
 }
 
 /// 路径推断：三级目录（标准结构）或二级目录（通用素材）→ ContentModule
-fn infer_content_module_from_path(components: &[String], root_idx: Option<usize>) -> Option<ContentModule> {
+fn infer_content_module_from_path(
+    components: &[String],
+    root_idx: Option<usize>,
+) -> Option<ContentModule> {
     let idx = root_idx?;
-    let offset = if components.get(idx)? == "通用素材" { 1 } else { 2 };
-    components.get(idx + offset).and_then(|dir| map_dir_to_module(dir))
+    let offset = if components.get(idx)? == "通用素材" {
+        1
+    } else {
+        2
+    };
+    components
+        .get(idx + offset)
+        .and_then(|dir| map_dir_to_module(dir))
 }
 
 /// 文件名前缀推断：【xxx】→ DocAttr
@@ -155,10 +168,16 @@ fn infer_security_layer(file_name: &str) -> Option<SecurityLayer> {
 /// v1.0 规范：路径推断（优先级最高）→ 文件名前缀推断 → 文件名关键词推断
 const DOMAIN_KEYWORDS: &[(&[&str], BusinessDomain)] = &[
     (&["等保", "等级保护"], BusinessDomain::NetworkSecurity),
-    (&["渗透", "漏洞", "代码审计"], BusinessDomain::ApplicationSecurity),
+    (
+        &["渗透", "漏洞", "代码审计"],
+        BusinessDomain::ApplicationSecurity,
+    ),
     (&["数据", "数据库", "隐私"], BusinessDomain::DataSecurity),
     (&["soc", "运营", "态势"], BusinessDomain::SecurityOperation),
-    (&["管理", "制度", "体系"], BusinessDomain::SecurityManagement),
+    (
+        &["管理", "制度", "体系"],
+        BusinessDomain::SecurityManagement,
+    ),
 ];
 
 const MODULE_KEYWORDS: &[(&[&str], ContentModule)] = &[
@@ -246,9 +265,7 @@ pub fn infer_categories(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{
-        BusinessDomain, ContentModule, DocAttr, ProjectPhase, SecurityLayer,
-    };
+    use crate::models::{BusinessDomain, ContentModule, DocAttr, ProjectPhase, SecurityLayer};
 
     // ========== 路径推断测试（标准三级目录）==========
 
@@ -277,8 +294,7 @@ mod tests {
     #[test]
     fn test_path_inference_contract_data_qualification() {
         let path = "/data/03-合同阶段/数据安全/资质证明/资质证书.pdf";
-        let (_attr, domain, module, phase, _layer) =
-            infer_categories(path, "资质证书.pdf", "");
+        let (_attr, domain, module, phase, _layer) = infer_categories(path, "资质证书.pdf", "");
         assert_eq!(phase, Some(ProjectPhase::Contract));
         assert_eq!(domain, Some(BusinessDomain::DataSecurity));
         assert_eq!(module, Some(ContentModule::QualificationProof));
@@ -287,8 +303,7 @@ mod tests {
     #[test]
     fn test_path_inference_operation_implementation() {
         let path = "/data/投标阶段/安全运营/实施计划/实施进度.xlsx";
-        let (_attr, domain, module, phase, _layer) =
-            infer_categories(path, "实施进度.xlsx", "");
+        let (_attr, domain, module, phase, _layer) = infer_categories(path, "实施进度.xlsx", "");
         assert_eq!(phase, Some(ProjectPhase::Bidding));
         assert_eq!(domain, Some(BusinessDomain::SecurityOperation));
         assert_eq!(module, Some(ContentModule::ImplementationPlan));
@@ -297,8 +312,7 @@ mod tests {
     #[test]
     fn test_path_inference_management_business_terms() {
         let path = "/data/合同阶段/安全管理/商务条款/合同条款.docx";
-        let (_attr, domain, module, phase, _layer) =
-            infer_categories(path, "合同条款.docx", "");
+        let (_attr, domain, module, phase, _layer) = infer_categories(path, "合同条款.docx", "");
         assert_eq!(phase, Some(ProjectPhase::Contract));
         assert_eq!(domain, Some(BusinessDomain::SecurityManagement));
         assert_eq!(module, Some(ContentModule::BusinessTerms));
@@ -326,12 +340,7 @@ mod tests {
                 let path = format!("/NAS/{}/{}/技术方案/测试文件.docx", phase_dir, domain_dir);
                 let (_attr, domain, module, phase, _layer) =
                     infer_categories(&path, "测试文件.docx", "");
-                assert_eq!(
-                    phase,
-                    Some(expected_phase),
-                    "路径 {} 的阶段推断错误",
-                    path
-                );
+                assert_eq!(phase, Some(expected_phase), "路径 {} 的阶段推断错误", path);
                 assert_eq!(
                     domain,
                     Some(expected_domain),
@@ -462,8 +471,7 @@ mod tests {
     #[test]
     fn test_generic_material_qualification() {
         let path = "/data/00-通用素材/资质证明/公司资质.pdf";
-        let (attr, domain, module, phase, _layer) =
-            infer_categories(path, "公司资质.pdf", "");
+        let (attr, domain, module, phase, _layer) = infer_categories(path, "公司资质.pdf", "");
         assert_eq!(phase, None);
         assert_eq!(domain, None);
         assert_eq!(module, Some(ContentModule::QualificationProof));
@@ -473,8 +481,7 @@ mod tests {
     #[test]
     fn test_generic_material_case() {
         let path = "/data/00-通用素材/案例介绍/成功案例.docx";
-        let (attr, domain, module, phase, _layer) =
-            infer_categories(path, "成功案例.docx", "");
+        let (attr, domain, module, phase, _layer) = infer_categories(path, "成功案例.docx", "");
         assert_eq!(phase, None);
         assert_eq!(domain, None);
         assert_eq!(module, Some(ContentModule::CaseIntroduction));
@@ -484,8 +491,7 @@ mod tests {
     #[test]
     fn test_generic_material_product() {
         let path = "/data/00-通用素材/产品资料/产品介绍.docx";
-        let (attr, domain, module, phase, _layer) =
-            infer_categories(path, "产品介绍.docx", "");
+        let (attr, domain, module, phase, _layer) = infer_categories(path, "产品介绍.docx", "");
         assert_eq!(phase, None);
         assert_eq!(domain, None);
         assert_eq!(module, Some(ContentModule::ProductMaterial));
@@ -495,8 +501,7 @@ mod tests {
     #[test]
     fn test_generic_material_template() {
         let path = "/data/00-通用素材/商务模板/报价模板.xlsx";
-        let (attr, domain, module, phase, _layer) =
-            infer_categories(path, "报价模板.xlsx", "");
+        let (attr, domain, module, phase, _layer) = infer_categories(path, "报价模板.xlsx", "");
         assert_eq!(phase, None);
         assert_eq!(domain, None);
         assert_eq!(module, Some(ContentModule::BusinessTerms));
@@ -519,8 +524,7 @@ mod tests {
     #[test]
     fn test_arbitrary_path_depth() {
         let path = "/Users/ljn/smart-editor/NAS/02-投标阶段/应用安全/偏离说明/偏离表.docx";
-        let (_attr, domain, module, phase, _layer) =
-            infer_categories(path, "偏离表.docx", "");
+        let (_attr, domain, module, phase, _layer) = infer_categories(path, "偏离表.docx", "");
         assert_eq!(phase, Some(ProjectPhase::Bidding));
         assert_eq!(domain, Some(BusinessDomain::ApplicationSecurity));
         assert_eq!(module, Some(ContentModule::DeviationExplanation));
@@ -529,8 +533,7 @@ mod tests {
     #[test]
     fn test_arbitrary_path_depth_generic() {
         let path = "/mnt/nas/00-通用素材/产品资料/防火墙产品.pdf";
-        let (_attr, domain, module, phase, _layer) =
-            infer_categories(path, "防火墙产品.pdf", "");
+        let (_attr, domain, module, phase, _layer) = infer_categories(path, "防火墙产品.pdf", "");
         assert_eq!(phase, None);
         assert_eq!(domain, None);
         assert_eq!(module, Some(ContentModule::ProductMaterial));
@@ -538,33 +541,153 @@ mod tests {
 
     // ========== 基准测试数据集 + 准确率验证（2.5）==========
 
-    type PathInferenceCase<'a> = (&'a str, &'a str, Option<ProjectPhase>, Option<BusinessDomain>, Option<ContentModule>);
+    type PathInferenceCase<'a> = (
+        &'a str,
+        &'a str,
+        Option<ProjectPhase>,
+        Option<BusinessDomain>,
+        Option<ContentModule>,
+    );
 
     /// 基准数据集：路径推断用例（期望路径推断命中）
     const PATH_INFERENCE_DATASET: &[PathInferenceCase<'_>] = &[
         // 方案阶段 × 5 领域
-        ("/NAS/01-方案阶段/网络安全/技术方案/方案.docx", "方案.docx", Some(ProjectPhase::Proposal), Some(BusinessDomain::NetworkSecurity), Some(ContentModule::TechnicalProposal)),
-        ("/NAS/01-方案阶段/应用安全/技术方案/方案.docx", "方案.docx", Some(ProjectPhase::Proposal), Some(BusinessDomain::ApplicationSecurity), Some(ContentModule::TechnicalProposal)),
-        ("/NAS/01-方案阶段/数据安全/技术方案/方案.docx", "方案.docx", Some(ProjectPhase::Proposal), Some(BusinessDomain::DataSecurity), Some(ContentModule::TechnicalProposal)),
-        ("/NAS/01-方案阶段/安全运营/技术方案/方案.docx", "方案.docx", Some(ProjectPhase::Proposal), Some(BusinessDomain::SecurityOperation), Some(ContentModule::TechnicalProposal)),
-        ("/NAS/01-方案阶段/安全管理/技术方案/方案.docx", "方案.docx", Some(ProjectPhase::Proposal), Some(BusinessDomain::SecurityManagement), Some(ContentModule::TechnicalProposal)),
+        (
+            "/NAS/01-方案阶段/网络安全/技术方案/方案.docx",
+            "方案.docx",
+            Some(ProjectPhase::Proposal),
+            Some(BusinessDomain::NetworkSecurity),
+            Some(ContentModule::TechnicalProposal),
+        ),
+        (
+            "/NAS/01-方案阶段/应用安全/技术方案/方案.docx",
+            "方案.docx",
+            Some(ProjectPhase::Proposal),
+            Some(BusinessDomain::ApplicationSecurity),
+            Some(ContentModule::TechnicalProposal),
+        ),
+        (
+            "/NAS/01-方案阶段/数据安全/技术方案/方案.docx",
+            "方案.docx",
+            Some(ProjectPhase::Proposal),
+            Some(BusinessDomain::DataSecurity),
+            Some(ContentModule::TechnicalProposal),
+        ),
+        (
+            "/NAS/01-方案阶段/安全运营/技术方案/方案.docx",
+            "方案.docx",
+            Some(ProjectPhase::Proposal),
+            Some(BusinessDomain::SecurityOperation),
+            Some(ContentModule::TechnicalProposal),
+        ),
+        (
+            "/NAS/01-方案阶段/安全管理/技术方案/方案.docx",
+            "方案.docx",
+            Some(ProjectPhase::Proposal),
+            Some(BusinessDomain::SecurityManagement),
+            Some(ContentModule::TechnicalProposal),
+        ),
         // 投标阶段 × 5 领域
-        ("/NAS/02-投标阶段/网络安全/投标应答/应答.docx", "应答.docx", Some(ProjectPhase::Bidding), Some(BusinessDomain::NetworkSecurity), Some(ContentModule::BidResponse)),
-        ("/NAS/02-投标阶段/应用安全/投标应答/应答.docx", "应答.docx", Some(ProjectPhase::Bidding), Some(BusinessDomain::ApplicationSecurity), Some(ContentModule::BidResponse)),
-        ("/NAS/02-投标阶段/数据安全/投标应答/应答.docx", "应答.docx", Some(ProjectPhase::Bidding), Some(BusinessDomain::DataSecurity), Some(ContentModule::BidResponse)),
-        ("/NAS/02-投标阶段/安全运营/投标应答/应答.docx", "应答.docx", Some(ProjectPhase::Bidding), Some(BusinessDomain::SecurityOperation), Some(ContentModule::BidResponse)),
-        ("/NAS/02-投标阶段/安全管理/投标应答/应答.docx", "应答.docx", Some(ProjectPhase::Bidding), Some(BusinessDomain::SecurityManagement), Some(ContentModule::BidResponse)),
+        (
+            "/NAS/02-投标阶段/网络安全/投标应答/应答.docx",
+            "应答.docx",
+            Some(ProjectPhase::Bidding),
+            Some(BusinessDomain::NetworkSecurity),
+            Some(ContentModule::BidResponse),
+        ),
+        (
+            "/NAS/02-投标阶段/应用安全/投标应答/应答.docx",
+            "应答.docx",
+            Some(ProjectPhase::Bidding),
+            Some(BusinessDomain::ApplicationSecurity),
+            Some(ContentModule::BidResponse),
+        ),
+        (
+            "/NAS/02-投标阶段/数据安全/投标应答/应答.docx",
+            "应答.docx",
+            Some(ProjectPhase::Bidding),
+            Some(BusinessDomain::DataSecurity),
+            Some(ContentModule::BidResponse),
+        ),
+        (
+            "/NAS/02-投标阶段/安全运营/投标应答/应答.docx",
+            "应答.docx",
+            Some(ProjectPhase::Bidding),
+            Some(BusinessDomain::SecurityOperation),
+            Some(ContentModule::BidResponse),
+        ),
+        (
+            "/NAS/02-投标阶段/安全管理/投标应答/应答.docx",
+            "应答.docx",
+            Some(ProjectPhase::Bidding),
+            Some(BusinessDomain::SecurityManagement),
+            Some(ContentModule::BidResponse),
+        ),
         // 合同阶段 × 5 领域
-        ("/NAS/03-合同阶段/网络安全/商务条款/条款.docx", "条款.docx", Some(ProjectPhase::Contract), Some(BusinessDomain::NetworkSecurity), Some(ContentModule::BusinessTerms)),
-        ("/NAS/03-合同阶段/应用安全/商务条款/条款.docx", "条款.docx", Some(ProjectPhase::Contract), Some(BusinessDomain::ApplicationSecurity), Some(ContentModule::BusinessTerms)),
-        ("/NAS/03-合同阶段/数据安全/商务条款/条款.docx", "条款.docx", Some(ProjectPhase::Contract), Some(BusinessDomain::DataSecurity), Some(ContentModule::BusinessTerms)),
-        ("/NAS/03-合同阶段/安全运营/商务条款/条款.docx", "条款.docx", Some(ProjectPhase::Contract), Some(BusinessDomain::SecurityOperation), Some(ContentModule::BusinessTerms)),
-        ("/NAS/03-合同阶段/安全管理/商务条款/条款.docx", "条款.docx", Some(ProjectPhase::Contract), Some(BusinessDomain::SecurityManagement), Some(ContentModule::BusinessTerms)),
+        (
+            "/NAS/03-合同阶段/网络安全/商务条款/条款.docx",
+            "条款.docx",
+            Some(ProjectPhase::Contract),
+            Some(BusinessDomain::NetworkSecurity),
+            Some(ContentModule::BusinessTerms),
+        ),
+        (
+            "/NAS/03-合同阶段/应用安全/商务条款/条款.docx",
+            "条款.docx",
+            Some(ProjectPhase::Contract),
+            Some(BusinessDomain::ApplicationSecurity),
+            Some(ContentModule::BusinessTerms),
+        ),
+        (
+            "/NAS/03-合同阶段/数据安全/商务条款/条款.docx",
+            "条款.docx",
+            Some(ProjectPhase::Contract),
+            Some(BusinessDomain::DataSecurity),
+            Some(ContentModule::BusinessTerms),
+        ),
+        (
+            "/NAS/03-合同阶段/安全运营/商务条款/条款.docx",
+            "条款.docx",
+            Some(ProjectPhase::Contract),
+            Some(BusinessDomain::SecurityOperation),
+            Some(ContentModule::BusinessTerms),
+        ),
+        (
+            "/NAS/03-合同阶段/安全管理/商务条款/条款.docx",
+            "条款.docx",
+            Some(ProjectPhase::Contract),
+            Some(BusinessDomain::SecurityManagement),
+            Some(ContentModule::BusinessTerms),
+        ),
         // 通用素材 × 4 类型
-        ("/NAS/00-通用素材/资质证明/资质.pdf", "资质.pdf", None, None, Some(ContentModule::QualificationProof)),
-        ("/NAS/00-通用素材/案例介绍/案例.docx", "案例.docx", None, None, Some(ContentModule::CaseIntroduction)),
-        ("/NAS/00-通用素材/产品资料/产品.docx", "产品.docx", None, None, Some(ContentModule::ProductMaterial)),
-        ("/NAS/00-通用素材/商务模板/模板.xlsx", "模板.xlsx", None, None, Some(ContentModule::BusinessTerms)),
+        (
+            "/NAS/00-通用素材/资质证明/资质.pdf",
+            "资质.pdf",
+            None,
+            None,
+            Some(ContentModule::QualificationProof),
+        ),
+        (
+            "/NAS/00-通用素材/案例介绍/案例.docx",
+            "案例.docx",
+            None,
+            None,
+            Some(ContentModule::CaseIntroduction),
+        ),
+        (
+            "/NAS/00-通用素材/产品资料/产品.docx",
+            "产品.docx",
+            None,
+            None,
+            Some(ContentModule::ProductMaterial),
+        ),
+        (
+            "/NAS/00-通用素材/商务模板/模板.xlsx",
+            "模板.xlsx",
+            None,
+            None,
+            Some(ContentModule::BusinessTerms),
+        ),
     ];
 
     #[test]
@@ -575,8 +698,7 @@ mod tests {
         for (path, file_name, expected_phase, expected_domain, expected_module) in
             PATH_INFERENCE_DATASET
         {
-            let (_attr, domain, module, phase, _layer) =
-                infer_categories(path, file_name, "");
+            let (_attr, domain, module, phase, _layer) = infer_categories(path, file_name, "");
 
             let phase_ok = phase == *expected_phase;
             let domain_ok = domain == *expected_domain;
@@ -597,20 +719,75 @@ mod tests {
         );
     }
 
-    type FilenameInferenceCase<'a> = (&'a str, Option<DocAttr>, Option<BusinessDomain>, Option<ContentModule>);
+    type FilenameInferenceCase<'a> = (
+        &'a str,
+        Option<DocAttr>,
+        Option<BusinessDomain>,
+        Option<ContentModule>,
+    );
 
     /// 纯文件名推断基准数据集（无路径信息，期望 fallback 命中）
     const FILENAME_INFERENCE_DATASET: &[FilenameInferenceCase<'_>] = &[
-        ("【投标应答】方案.docx", Some(DocAttr::BidResponse), Some(BusinessDomain::NetworkSecurity), Some(ContentModule::TechnicalProposal)),
-        ("【技术方案】设计.docx", Some(DocAttr::TechnicalProposal), Some(BusinessDomain::NetworkSecurity), Some(ContentModule::TechnicalProposal)),
-        ("【实施方案】计划.docx", Some(DocAttr::ImplementationPlan), Some(BusinessDomain::NetworkSecurity), Some(ContentModule::ImplementationPlan)),
-        ("【合同协议】合同.pdf", Some(DocAttr::ContractAgreement), Some(BusinessDomain::NetworkSecurity), Some(ContentModule::BusinessTerms)),
-        ("【汇报材料】汇报.pptx", Some(DocAttr::ReportMaterial), Some(BusinessDomain::NetworkSecurity), Some(ContentModule::TechnicalProposal)),
-        ("偏离表.xlsx", Some(DocAttr::ReportMaterial), Some(BusinessDomain::NetworkSecurity), Some(ContentModule::DeviationExplanation)),
-        ("资质证书.pdf", Some(DocAttr::ReportMaterial), Some(BusinessDomain::NetworkSecurity), Some(ContentModule::QualificationProof)),
-        ("等保方案.docx", Some(DocAttr::ReportMaterial), Some(BusinessDomain::NetworkSecurity), Some(ContentModule::TechnicalProposal)),
-        ("渗透测试报告.pdf", Some(DocAttr::ReportMaterial), Some(BusinessDomain::ApplicationSecurity), Some(ContentModule::TechnicalProposal)),
-        ("数据安全方案.docx", Some(DocAttr::ReportMaterial), Some(BusinessDomain::DataSecurity), Some(ContentModule::TechnicalProposal)),
+        (
+            "【投标应答】方案.docx",
+            Some(DocAttr::BidResponse),
+            Some(BusinessDomain::NetworkSecurity),
+            Some(ContentModule::TechnicalProposal),
+        ),
+        (
+            "【技术方案】设计.docx",
+            Some(DocAttr::TechnicalProposal),
+            Some(BusinessDomain::NetworkSecurity),
+            Some(ContentModule::TechnicalProposal),
+        ),
+        (
+            "【实施方案】计划.docx",
+            Some(DocAttr::ImplementationPlan),
+            Some(BusinessDomain::NetworkSecurity),
+            Some(ContentModule::ImplementationPlan),
+        ),
+        (
+            "【合同协议】合同.pdf",
+            Some(DocAttr::ContractAgreement),
+            Some(BusinessDomain::NetworkSecurity),
+            Some(ContentModule::BusinessTerms),
+        ),
+        (
+            "【汇报材料】汇报.pptx",
+            Some(DocAttr::ReportMaterial),
+            Some(BusinessDomain::NetworkSecurity),
+            Some(ContentModule::TechnicalProposal),
+        ),
+        (
+            "偏离表.xlsx",
+            Some(DocAttr::ReportMaterial),
+            Some(BusinessDomain::NetworkSecurity),
+            Some(ContentModule::DeviationExplanation),
+        ),
+        (
+            "资质证书.pdf",
+            Some(DocAttr::ReportMaterial),
+            Some(BusinessDomain::NetworkSecurity),
+            Some(ContentModule::QualificationProof),
+        ),
+        (
+            "等保方案.docx",
+            Some(DocAttr::ReportMaterial),
+            Some(BusinessDomain::NetworkSecurity),
+            Some(ContentModule::TechnicalProposal),
+        ),
+        (
+            "渗透测试报告.pdf",
+            Some(DocAttr::ReportMaterial),
+            Some(BusinessDomain::ApplicationSecurity),
+            Some(ContentModule::TechnicalProposal),
+        ),
+        (
+            "数据安全方案.docx",
+            Some(DocAttr::ReportMaterial),
+            Some(BusinessDomain::DataSecurity),
+            Some(ContentModule::TechnicalProposal),
+        ),
     ];
 
     #[test]

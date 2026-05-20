@@ -6,9 +6,7 @@ use crate::utils::validate_path;
 
 #[allow(dead_code)]
 fn feature_disabled_err(name: &str) -> AppError {
-    AppError::Parse(format!(
-        "{name} 解析未启用，请使用 --features {name} 编译"
-    ))
+    AppError::Parse(format!("{name} 解析未启用，请使用 --features {name} 编译"))
 }
 
 /// 根据文件扩展名选择对应解析器，提取纯文本
@@ -246,8 +244,12 @@ mod tests {
     ///  helper：创建一个包含两个段落的测试 docx 文件
     fn create_test_docx(path: &str) {
         let mut docx = docx_rs::Docx::new();
-        docx = docx.add_paragraph(docx_rs::Paragraph::new().add_run(docx_rs::Run::new().add_text("第一段测试内容。")));
-        docx = docx.add_paragraph(docx_rs::Paragraph::new().add_run(docx_rs::Run::new().add_text("第二段测试内容。")));
+        docx = docx.add_paragraph(
+            docx_rs::Paragraph::new().add_run(docx_rs::Run::new().add_text("第一段测试内容。")),
+        );
+        docx = docx.add_paragraph(
+            docx_rs::Paragraph::new().add_run(docx_rs::Run::new().add_text("第二段测试内容。")),
+        );
         let file = fs::File::create(path).unwrap();
         docx.build().pack(file).unwrap();
     }

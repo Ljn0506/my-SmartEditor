@@ -469,7 +469,6 @@ pub struct FixResult {
     pub changes: Vec<ParagraphChange>,
 }
 
-
 // ========== Phase 2: 智能生成卡片模型 ==========
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -563,4 +562,3 @@ pub struct GlobalParams {
     pub qps: Option<i32>,
     pub concurrent_users: Option<i32>,
 }
-
