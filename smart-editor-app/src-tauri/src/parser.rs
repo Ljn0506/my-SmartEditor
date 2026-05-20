@@ -4,9 +4,17 @@ use crate::error::{AppError, Result};
 use crate::models::{Paragraph, ParsedDocumentStructured};
 use crate::utils::validate_path;
 
+#[allow(dead_code)]
+fn feature_disabled_err(name: &str) -> AppError {
+    AppError::Parse(format!(
+        "{name} 解析未启用，请使用 --features {name} 编译"
+    ))
+}
+
 /// 根据文件扩展名选择对应解析器，提取纯文本
 pub fn parse_document(file_path: &str) -> Result<String> {
     validate_path(file_path)?;
+    check_file_size(file_path)?;
     let path = Path::new(file_path);
     let ext = path
         .extension()
@@ -18,24 +26,18 @@ pub fn parse_document(file_path: &str) -> Result<String> {
         #[cfg(feature = "docx")]
         "docx" => parse_docx(file_path).map(|(text, _)| text),
         #[cfg(not(feature = "docx"))]
-        "docx" => Err(AppError::Parse(
-            "docx 解析未启用，请使用 --features docx 编译".to_string(),
-        )),
+        "docx" => Err(feature_disabled_err("docx")),
         "doc" => Err(AppError::Parse(
             "doc 格式不支持，请转换为 .docx 后重试".to_string(),
         )),
         #[cfg(feature = "pdf")]
         "pdf" => parse_pdf(file_path),
         #[cfg(not(feature = "pdf"))]
-        "pdf" => Err(AppError::Parse(
-            "pdf 解析未启用，请使用 --features pdf 编译".to_string(),
-        )),
+        "pdf" => Err(feature_disabled_err("pdf")),
         #[cfg(feature = "excel")]
         "xlsx" | "xls" => parse_xlsx(file_path),
         #[cfg(not(feature = "excel"))]
-        "xlsx" | "xls" => Err(AppError::Parse(
-            "excel 解析未启用，请使用 --features excel 编译".to_string(),
-        )),
+        "xlsx" | "xls" => Err(feature_disabled_err("excel")),
         "txt" | "md" => parse_txt(file_path),
         _ => Err(AppError::Parse(format!("不支持的文件格式: {}", ext))),
     }
@@ -45,6 +47,7 @@ pub fn parse_document(file_path: &str) -> Result<String> {
 /// .docx 按 docx-rs 原始段落单元切分，其他格式 fallback 到按行切分
 pub fn parse_document_structured(file_path: &str) -> Result<ParsedDocumentStructured> {
     validate_path(file_path)?;
+    check_file_size(file_path)?;
     let path = Path::new(file_path);
     let ext = path
         .extension()
@@ -59,9 +62,7 @@ pub fn parse_document_structured(file_path: &str) -> Result<ParsedDocumentStruct
             Ok(ParsedDocumentStructured { text, paragraphs })
         }
         #[cfg(not(feature = "docx"))]
-        "docx" => Err(AppError::Parse(
-            "docx 解析未启用，请使用 --features docx 编译".to_string(),
-        )),
+        "docx" => Err(feature_disabled_err("docx")),
         "doc" => Err(AppError::Parse(
             "doc 格式不支持，请转换为 .docx 后重试".to_string(),
         )),
@@ -90,16 +91,21 @@ pub fn parse_document_structured(file_path: &str) -> Result<ParsedDocumentStruct
     }
 }
 
-/// 解析 docx，返回 (纯文本, 段落列表)
-/// 段落按 docx-rs 原始结构提取：Paragraph 和 TableRow 各为一个段落单元
 const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024; // 50MB
 
+fn check_file_size(file_path: &str) -> Result<()> {
+    if let Ok(meta) = std::fs::metadata(file_path) {
+        if meta.len() > MAX_FILE_SIZE {
+            return Err(AppError::Parse("文件超过 50MB，无法解析".to_string()));
+        }
+    }
+    Ok(())
+}
+
+/// 解析 docx，返回 (纯文本, 段落列表)
+/// 段落按 docx-rs 原始结构提取：Paragraph 和 TableRow 各为一个段落单元
 #[cfg(feature = "docx")]
 fn parse_docx(file_path: &str) -> Result<(String, Vec<Paragraph>)> {
-    let meta = std::fs::metadata(file_path)?;
-    if meta.len() > MAX_FILE_SIZE {
-        return Err(AppError::Parse("文件超过 50MB，无法解析".to_string()));
-    }
     let bytes = std::fs::read(file_path)?;
     let docx = docx_rs::read_docx(&bytes)
         .map_err(|e| AppError::Parse(format!("docx 解析失败: {:?}", e)))?;
@@ -189,10 +195,6 @@ pub(crate) fn extract_paragraph_text_to_string(p: &docx_rs::Paragraph) -> String
 
 #[cfg(feature = "pdf")]
 fn parse_pdf(file_path: &str) -> Result<String> {
-    let meta = std::fs::metadata(file_path)?;
-    if meta.len() > MAX_FILE_SIZE {
-        return Err(AppError::Parse("文件超过 50MB，无法解析".to_string()));
-    }
     let text = pdf_extract::extract_text(file_path)
         .map_err(|e| AppError::Parse(format!("pdf 解析失败: {:?}", e)))?;
     Ok(text)
@@ -201,11 +203,6 @@ fn parse_pdf(file_path: &str) -> Result<String> {
 #[cfg(feature = "excel")]
 fn parse_xlsx(file_path: &str) -> Result<String> {
     use calamine::{open_workbook, Reader, Xlsx};
-
-    let meta = std::fs::metadata(file_path)?;
-    if meta.len() > MAX_FILE_SIZE {
-        return Err(AppError::Parse("文件超过 50MB，无法解析".to_string()));
-    }
 
     let mut workbook: Xlsx<_> =
         open_workbook(file_path).map_err(|e| AppError::Parse(format!("xlsx 打开失败: {:?}", e)))?;
@@ -238,10 +235,6 @@ fn parse_xlsx(file_path: &str) -> Result<String> {
 }
 
 fn parse_txt(file_path: &str) -> Result<String> {
-    let meta = std::fs::metadata(file_path)?;
-    if meta.len() > MAX_FILE_SIZE {
-        return Err(AppError::Parse("文件超过 50MB，无法解析".to_string()));
-    }
     std::fs::read_to_string(file_path).map_err(|e| AppError::Io(e.to_string()))
 }
 

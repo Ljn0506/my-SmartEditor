@@ -538,26 +538,25 @@ async fn check_self_review_async(
     Ok(report)
 }
 
-#[cfg(feature = "docx")]
 #[tauri::command]
 fn apply_self_review_fixes(
     file_path: String,
     issues: Vec<crate::models::SelfReviewIssue>,
     mode: crate::models::FixMode,
 ) -> Result<crate::models::FixResult, String> {
-    crate::utils::validate_path(&file_path).map_err(|e| e.to_string())?;
-    crate::apply_self_review_fixes::apply_self_review_fixes(&file_path, &issues, mode)
-        .map_err(|e| e.to_string())
-}
-
-#[cfg(not(feature = "docx"))]
-#[tauri::command]
-fn apply_self_review_fixes(
-    _file_path: String,
-    _issues: Vec<crate::models::SelfReviewIssue>,
-    _mode: crate::models::FixMode,
-) -> Result<crate::models::FixResult, String> {
-    Err("docx 修复功能未启用，请使用 --features docx 编译".to_string())
+    #[cfg(feature = "docx")]
+    {
+        crate::utils::validate_path(&file_path).map_err(|e| e.to_string())?;
+        crate::apply_self_review_fixes::apply_self_review_fixes(&file_path, &issues, mode)
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(feature = "docx"))]
+    {
+        let _ = file_path;
+        let _ = issues;
+        let _ = mode;
+        Err("docx 修复功能未启用，请使用 --features docx 编译".to_string())
+    }
 }
 
 // --- Phase 2: 智能生成命令 ---

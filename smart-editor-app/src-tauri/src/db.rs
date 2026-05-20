@@ -171,6 +171,7 @@ impl Database {
             limit
         ));
         if let Some(offset) = filter.offset {
+            let offset = offset.min(10_000);
             sql.push_str(&format!(" OFFSET {}", offset));
         }
 
