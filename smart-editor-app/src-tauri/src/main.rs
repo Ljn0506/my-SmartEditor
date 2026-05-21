@@ -232,16 +232,7 @@ async fn index_templates(
 #[tauri::command]
 fn get_ai_config(state: tauri::State<'_, AppState>) -> Result<AiConfig, String> {
     let app_config = config::load_or_create(&state.config_path).map_err(|e| e.to_string())?;
-    let mut ai = app_config.to_ai_config();
-    // 脱敏：避免 API Key 泄露到前端
-    ai.api_key = ai.api_key.map(|k| {
-        if k.len() > 8 {
-            format!("{}****", &k[..4])
-        } else {
-            "****".to_string()
-        }
-    });
-    Ok(ai)
+    Ok(app_config.to_ai_config())
 }
 
 #[tauri::command]

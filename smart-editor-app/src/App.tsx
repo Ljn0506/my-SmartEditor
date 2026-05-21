@@ -936,6 +936,25 @@ function SettingsTab() {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
+  const PROVIDER_META: Record<string, { baseUrl: string; models: string[] }> = {
+    Ollama: {
+      baseUrl: "http://localhost:11434",
+      models: ["qwen2.5:14b", "llama3.1:8b", "deepseek-r1:14b"],
+    },
+    Claude: {
+      baseUrl: "https://api.anthropic.com",
+      models: ["claude-3-5-sonnet-20241022", "claude-3-opus-20240229", "claude-3-haiku-20240307"],
+    },
+    DeepSeek: {
+      baseUrl: "https://api.deepseek.com",
+      models: ["deepseek-chat", "deepseek-reasoner"],
+    },
+    Kimi: {
+      baseUrl: "https://api.moonshot.cn",
+      models: ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k", "moonshot-v1-1m"],
+    },
+  };
+
   useEffect(() => {
     setLoading(true);
     invoke("get_ai_config")
@@ -950,6 +969,23 @@ function SettingsTab() {
       .catch((e) => setMsg(`加载配置失败: ${String(e)}`))
       .finally(() => setLoading(false));
   }, []);
+
+  const handleProviderChange = (provider: string) => {
+    const meta = PROVIDER_META[provider];
+    if (!meta) return;
+    setAiConfig((prev) => {
+      if (!prev) return null;
+      const isDefaultUrl =
+        !prev.base_url ||
+        Object.values(PROVIDER_META).some((m) => m.baseUrl === prev.base_url);
+      return {
+        ...prev,
+        provider,
+        base_url: isDefaultUrl ? meta.baseUrl : prev.base_url,
+        model: meta.models[0],
+      };
+    });
+  };
 
   const handleSave = async () => {
     if (!aiConfig) return;
@@ -972,6 +1008,9 @@ function SettingsTab() {
       setSaving(false);
     }
   };
+
+  const currentModels = aiConfig ? (PROVIDER_META[aiConfig.provider]?.models || []) : [];
+  const isCustomModel = aiConfig ? !currentModels.includes(aiConfig.model) : false;
 
   if (loading) {
     return (
@@ -996,11 +1035,7 @@ function SettingsTab() {
               <select
                 id="ai-mode"
                 value={aiConfig?.provider || "Ollama"}
-                onChange={(e) =>
-                  setAiConfig((prev) =>
-                    prev ? { ...prev, provider: e.target.value } : null
-                  )
-                }
+                onChange={(e) => handleProviderChange(e.target.value)}
                 className="w-full px-3 py-2 rounded border border-gray-200 text-sm"
               >
                 <option value="Ollama">本地 Ollama</option>
@@ -1041,18 +1076,35 @@ function SettingsTab() {
             </div>
             <div>
               <label htmlFor="ai-model" className="text-sm text-gray-600 block mb-1">模型</label>
-              <input
+              <select
                 id="ai-model"
-                type="text"
-                value={aiConfig?.model || ""}
-                onChange={(e) =>
+                value={isCustomModel ? "__custom__" : (aiConfig?.model || "")}
+                onChange={(e) => {
+                  const value = e.target.value;
                   setAiConfig((prev) =>
-                    prev ? { ...prev, model: e.target.value } : null
-                  )
-                }
-                placeholder="qwen2.5:14b"
+                    prev ? { ...prev, model: value === "__custom__" ? "" : value } : null
+                  );
+                }}
                 className="w-full px-3 py-2 rounded border border-gray-200 text-sm"
-              />
+              >
+                {currentModels.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+                <option value="__custom__">其他（自定义）</option>
+              </select>
+              {isCustomModel && (
+                <input
+                  type="text"
+                  value={aiConfig?.model || ""}
+                  onChange={(e) =>
+                    setAiConfig((prev) =>
+                      prev ? { ...prev, model: e.target.value } : null
+                    )
+                  }
+                  placeholder="输入模型名称"
+                  className="w-full mt-2 px-3 py-2 rounded border border-gray-200 text-sm"
+                />
+              )}
             </div>
             {msg && (
               <p className={`text-xs ${msg.includes("失败") ? "text-red-600" : "text-emerald-600"}`}>
