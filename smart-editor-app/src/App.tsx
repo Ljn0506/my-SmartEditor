@@ -1006,6 +1006,7 @@ function SettingsTab() {
                 <option value="Ollama">本地 Ollama</option>
                 <option value="Claude">Claude API</option>
                 <option value="DeepSeek">DeepSeek API</option>
+                <option value="Kimi">Kimi (Moonshot)</option>
               </select>
             </div>
             <div>

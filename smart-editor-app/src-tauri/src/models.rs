@@ -95,6 +95,7 @@ define_enum!(AiProvider {
     Ollama = "Ollama",
     Claude = "Claude",
     DeepSeek = "DeepSeek",
+    Kimi = "Kimi",
 });
 
 define_enum!(Severity {

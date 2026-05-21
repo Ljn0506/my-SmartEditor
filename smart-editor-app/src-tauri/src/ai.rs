@@ -160,6 +160,7 @@ impl AiClient {
             crate::models::AiProvider::Ollama => self.chat_ollama(&bounded).await,
             crate::models::AiProvider::Claude => self.chat_claude(&bounded).await,
             crate::models::AiProvider::DeepSeek => self.chat_deepseek(&bounded).await,
+            crate::models::AiProvider::Kimi => self.chat_kimi(&bounded).await,
         }
     }
 
@@ -240,6 +241,31 @@ impl AiClient {
             .ok_or_else(|| AppError::Ai("DeepSeek API Key 未配置".to_string()))?;
         self.chat_api_compatible(
             &format!("{}/chat/completions", self.config.base_url),
+            vec![("Authorization", format!("Bearer {}", api_key))],
+            json!({
+                "model": self.config.model,
+                "messages": [{"role": "user", "content": prompt}],
+            }),
+            |data| {
+                data.get("choices")?
+                    .as_array()?
+                    .first()?
+                    .get("message")?
+                    .get("content")?
+                    .as_str()
+            },
+        )
+        .await
+    }
+
+    async fn chat_kimi(&self, prompt: &str) -> Result<String> {
+        let api_key = self
+            .config
+            .api_key
+            .as_ref()
+            .ok_or_else(|| AppError::Ai("Kimi API Key 未配置".to_string()))?;
+        self.chat_api_compatible(
+            &format!("{}/v1/chat/completions", self.config.base_url),
             vec![("Authorization", format!("Bearer {}", api_key))],
             json!({
                 "model": self.config.model,
